@@ -132,6 +132,22 @@
   .rdone{opacity:.5;} .rdone .rtxt{text-decoration:line-through;}
 
   .keynote{font-size:12px; color:var(--ink-faint); text-align:center; padding:8px 30px 20px; line-height:1.4;}
+
+  /* chat */
+  #screen-chat.active{display:flex; flex-direction:column;}
+  .chat-scroll{flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch; padding:14px 16px 8px;}
+  .msg{max-width:84%; padding:11px 14px; border-radius:16px; margin-bottom:10px; font-size:15px; line-height:1.5; white-space:pre-wrap;}
+  .msg.user{background:var(--ink); color:var(--paper); margin-left:auto; border-bottom-right-radius:5px;}
+  .msg.ai{background:var(--paper-warm); border:1px solid var(--line-soft); color:var(--ink); border-bottom-left-radius:5px;}
+  .msg.ai b{color:var(--ink);}
+  .msg.sys{background:none; border:1px dashed var(--line); color:var(--ink-faint); font-size:13px; text-align:center; max-width:100%; font-style:italic;}
+  .msg .think{display:inline-block; color:var(--ink-faint);}
+  .chat-suggest{display:flex; gap:8px; flex-wrap:wrap; padding:0 16px 6px;}
+  .chat-suggest button{background:var(--paper-deep); border:1px solid var(--line); border-radius:18px; padding:8px 13px; font-size:13px; color:var(--ink-soft); font-family:var(--sans); cursor:pointer;}
+  .chat-input{display:flex; gap:8px; padding:10px 14px calc(14px + env(safe-area-inset-bottom)); border-top:1px solid var(--line); background:var(--paper);}
+  .chat-input textarea{flex:1; resize:none; border:1px solid var(--line); border-radius:20px; padding:11px 15px; font-size:16px; font-family:var(--sans); background:var(--paper-warm); color:var(--ink); max-height:120px; line-height:1.4;}
+  .chat-input button{flex-shrink:0; width:46px; border:none; border-radius:50%; background:var(--ink); color:var(--paper); font-size:20px; cursor:pointer;}
+  .chat-input button:disabled{opacity:.4;}
   @media (prefers-reduced-motion:reduce){*{animation:none!important; transition:none!important;}}
 </style>
 </head>
@@ -143,6 +159,7 @@
       <span class="mast">Carnet</span>
       <div class="right">
         <button class="bell" onclick="openReminders()">🔔<span class="dot" id="bellDot" style="display:none;">0</span></button>
+        <button class="bell" onclick="openChat(null)" title="Assistant" style="font-size:20px;">💬</button>
         <button class="bell" onclick="openSettings()" title="Réglages" style="font-size:20px;">⚙︎</button>
         <span class="count" id="syncBadge" style="cursor:pointer;" onclick="syncNow()"></span>
         <span class="count" id="contactCount"></span>
@@ -227,6 +244,16 @@
   <section id="screen-reminders" class="screen">
     <div class="backbar"><button class="back" onclick="go('list')">‹ Carnet</button><div class="spacer"></div><span class="count">Rappels</span></div>
     <div class="rem-group" id="remindersBody"></div>
+  </section>
+
+  <section id="screen-chat" class="screen">
+    <div class="backbar"><button class="back" id="chatBack">‹ Retour</button><div class="spacer"></div><span class="count" id="chatTitle">Assistant</span></div>
+    <div class="chat-scroll" id="chatScroll"></div>
+    <div class="chat-suggest" id="chatSuggest"></div>
+    <div class="chat-input">
+      <textarea id="chatText" rows="1" placeholder="Posez une question…"></textarea>
+      <button id="chatSend">↑</button>
+    </div>
   </section>
 
   <button class="fab" id="fab" onclick="openNew()">+</button>
@@ -378,6 +405,7 @@ function openDetail(id){
       ${c.edu?`<div class="meta">${esc(c.edu)}</div>`:''}
       ${metaBits.length?`<div class="meta">${metaBits.join(' · ')}</div>`:''}</div>
     ${c.summary?`<div class="sec"><h3>À retenir</h3><div class="field-line">${esc(c.summary)}</div></div>`:''}
+    <div class="sec"><button class="btn accent" onclick="openChat('${c.id}')">💬 Briefing avant rendez-vous</button></div>
     ${relHtml}${remHtml}
     <div class="sec"><h3>Notes d'échanges · ${notes.length}</h3>
       <button class="btn ghost" style="margin-bottom:14px;" onclick="openNote()">+ Nouvelle note</button>
@@ -564,7 +592,98 @@ $('formDelete').onclick=async()=>{if(!confirm('Supprimer ce contact et toutes se
 $('search').oninput=e=>renderList(e.target.value);
 $('f-name').oninput=()=>{$('f-name').style.borderColor='';};
 
-/* ========== SETTINGS / SYNC UI ========== */
+/* ========== CHAT / BRIEFING ========== */
+let chatPersonId=null, chatHistory=[], chatBusy=false;
+function contactContext(c){
+  const notes=[...(c.notes||[])].sort((a,b)=>a.ts-b.ts)
+    .map(n=>`- [${fullDate(n.ts)}] ${n.body}`).join('\n')||'(aucune note)';
+  const rems=(c.reminders||[]).filter(r=>!r.done).map(r=>`- ${r.text}${r.due?' (échéance '+fullDate(new Date(r.due).getTime())+')':''}`).join('\n')||'(aucun)';
+  const rels=(c.relations||[]).map(r=>`- ${r.name}${r.context?' ('+r.context+')':''}`).join('\n')||'(aucune)';
+  return `### ${c.name}\nPoste: ${c.role||'?'}\nParcours: ${c.edu||'?'}\nCoordonnées: ${c.contact||'?'}\nRencontre: ${c.met||'?'}\nÀ retenir: ${c.summary||'?'}\nDernier contact: ${relDate(lastTouch(c))}\nNotes d'échanges:\n${notes}\nRappels en cours:\n${rems}\nRelations:\n${rels}`;
+}
+function carnetOverview(){
+  return contacts.map(c=>`- ${c.name} — ${c.role||'poste ?'} — vu ${relDate(lastTouch(c))}${(c.reminders||[]).some(r=>!r.done)?' — a des rappels en cours':''}`).join('\n');
+}
+function chatSystem(){
+  if(chatPersonId){
+    const c=contacts.find(x=>x.id===chatPersonId);
+    return `Tu es l'assistant d'un carnet relationnel personnel. L'utilisateur s'apprête à revoir une personne. `+
+      `Aide-le à se préparer : rappelle qui elle est, l'historique de leurs échanges, ce qui compte pour elle, et les suites à donner. `+
+      `Sois concret, bref, et n'invente jamais d'information absente de la fiche. Réponds en français.\n\n`+
+      `FICHE COMPLÈTE :\n${contactContext(c)}`;
+  }
+  return `Tu es l'assistant d'un carnet relationnel personnel. Tu as accès à la liste des contacts ci-dessous et tu réponds aux questions de l'utilisateur `+
+    `(qui relancer, ce qu'il sait sur une personne, qui il a rencontré quelque part…). Si une question porte sur une personne précise, appuie-toi sur sa fiche. `+
+    `N'invente jamais. Réponds en français, de façon concrète et brève.\n\nCONTACTS :\n${carnetOverview()}\n\n`+
+    `FICHES DÉTAILLÉES :\n${contacts.map(contactContext).join('\n\n')}`;
+}
+function renderChat(){
+  const s=$('chatScroll');
+  s.innerHTML=chatHistory.map(m=>{
+    if(m.role==='system_note') return `<div class="msg sys">${esc(m.content)}</div>`;
+    const cls=m.role==='user'?'user':'ai';
+    return `<div class="msg ${cls}">${formatAI(m.content)}</div>`;
+  }).join('') + (chatBusy?`<div class="msg ai"><span class="think"><span class="spinner"></span>réflexion…</span></div>`:'');
+  s.scrollTop=s.scrollHeight;
+}
+function formatAI(t){ // light formatting: **bold** and line breaks, escaped
+  let h=esc(t).replace(/\*\*(.+?)\*\*/g,'<b>$1</b>');
+  return h;
+}
+function setSuggestions(){
+  const box=$('chatSuggest');
+  let chips=[];
+  if(chatPersonId) chips=['Quels sont les points de suivi ?','Résume notre dernier échange','Sur quoi rebondir ?'];
+  else chips=['Qui dois-je relancer ?','Qui ai-je vu récemment ?'];
+  box.innerHTML=chips.map(c=>`<button onclick="quickAsk(${JSON.stringify(c).replace(/"/g,'&quot;')})">${esc(c)}</button>`).join('');
+}
+function quickAsk(t){ $('chatText').value=t; sendChat(); }
+function openChat(personId){
+  chatPersonId=personId; chatHistory=[]; chatBusy=false;
+  $('chatBack').onclick=()=> personId? openDetail(personId) : go('list');
+  if(personId){
+    const c=contacts.find(x=>x.id===personId); $('chatTitle').textContent=c?c.name:'Assistant';
+    setSuggestions(); renderChat(); go('chat');
+    // auto-briefing
+    autoBrief();
+  } else {
+    $('chatTitle').textContent='Assistant — tout le carnet';
+    chatHistory.push({role:'system_note',content:contacts.length?`Posez une question sur n'importe lequel de vos ${contacts.length} contacts.`:'Votre carnet est vide.'});
+    setSuggestions(); renderChat(); go('chat');
+  }
+}
+async function autoBrief(){
+  chatBusy=true; renderChat();
+  try{
+    const ans=await chatCall('Fais-moi un briefing de préparation avant de revoir cette personne : qui elle est, l\'essentiel de notre historique, et les points de suivi à ne pas oublier.');
+    chatHistory.push({role:'assistant',content:ans});
+  }catch(e){ chatHistory.push({role:'assistant',content:'⚠ '+e.message}); }
+  chatBusy=false; renderChat();
+}
+async function chatCall(userMsg){
+  // build messages array from history (only user/assistant), append new user msg
+  const msgs=chatHistory.filter(m=>m.role==='user'||m.role==='assistant').map(m=>({role:m.role,content:m.content}));
+  msgs.push({role:'user',content:userMsg});
+  const key=getApiKey(); if(!key) throw new Error('Aucune clé fournie.');
+  const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',
+    headers:{'content-type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
+    body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:1024,system:chatSystem(),messages:msgs})});
+  if(!r.ok){const t=await r.text(); if(r.status===401){localStorage.removeItem('anthropic_key'); throw new Error('Clé refusée. Relancez pour la ressaisir.');} throw new Error('Erreur '+r.status+' — '+t.slice(0,140));}
+  const data=await r.json(); return (data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('').trim();
+}
+async function sendChat(){
+  if(chatBusy)return; const t=$('chatText').value.trim(); if(!t)return;
+  $('chatText').value=''; $('chatText').style.height='auto';
+  chatHistory.push({role:'user',content:t}); chatBusy=true; renderChat();
+  try{ const ans=await chatCall(t); chatHistory.push({role:'assistant',content:ans}); }
+  catch(e){ chatHistory.push({role:'assistant',content:'⚠ '+e.message}); }
+  chatBusy=false; renderChat();
+}
+$('chatSend').onclick=sendChat;
+$('chatText').addEventListener('input',function(){this.style.height='auto'; this.style.height=Math.min(this.scrollHeight,120)+'px';});
+$('chatText').addEventListener('keydown',function(e){ if(e.key==='Enter'&&!e.shiftKey){e.preventDefault(); sendChat();} });
+
+
 function openSettings(){ $('sb-url').value=SB.url; $('sb-key').value=SB.key; $('sb-status').textContent=''; $('sb-status').className='ai-status'; go('settings'); }
 $('sb-save').onclick=async()=>{
   const url=$('sb-url').value.trim().replace(/\/$/,''); const key=$('sb-key').value.trim();
