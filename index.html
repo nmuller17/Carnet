@@ -143,6 +143,8 @@
       <span class="mast">Carnet</span>
       <div class="right">
         <button class="bell" onclick="openReminders()">🔔<span class="dot" id="bellDot" style="display:none;">0</span></button>
+        <button class="bell" onclick="openSettings()" title="Réglages" style="font-size:20px;">⚙︎</button>
+        <span class="count" id="syncBadge" style="cursor:pointer;" onclick="syncNow()"></span>
         <span class="count" id="contactCount"></span>
       </div>
     </header>
@@ -193,6 +195,35 @@
     <div class="formgrid" id="reviewBody"></div>
   </section>
 
+  <section id="screen-settings" class="screen">
+    <div class="backbar"><button class="back" onclick="go('list')">‹ Carnet</button><div class="spacer"></div><span class="count">Réglages</span></div>
+    <div class="formgrid">
+      <div class="ai-panel" style="border-style:solid;border-color:var(--line);">
+        <div class="ai-title">Synchronisation entre appareils</div>
+        <div class="ai-sub">Collez les deux valeurs de votre projet Supabase (Project Settings → API). Elles restent sur cet appareil et permettent à vos appareils de partager le même carnet.</div>
+        <label class="fl">Project URL</label>
+        <input class="f" id="sb-url" placeholder="https://xxxxx.supabase.co" autocomplete="off" autocapitalize="off" spellcheck="false">
+        <label class="fl">Clé anon public</label>
+        <input class="f" id="sb-key" placeholder="eyJhbGci…" autocomplete="off" autocapitalize="off" spellcheck="false">
+        <button class="btn primary" id="sb-save" style="margin-top:14px;">Activer la synchronisation</button>
+        <div class="ai-status" id="sb-status"></div>
+      </div>
+
+      <div class="ai-panel" style="border-style:solid;border-color:var(--line);margin-top:16px;">
+        <div class="ai-title">Sauvegarde manuelle</div>
+        <div class="ai-sub">Filet de sécurité indépendant de la synchro : exportez un fichier de tout votre carnet, ou réimportez-le.</div>
+        <div class="btn-row" style="margin-top:4px;">
+          <button class="btn ghost" id="exportBtn">Exporter</button>
+          <button class="btn ghost" id="importBtn">Importer</button>
+        </div>
+        <input type="file" id="importFile" accept="application/json" style="display:none;">
+        <div class="ai-status" id="io-status"></div>
+      </div>
+
+      <p class="keynote">La synchronisation se fait automatiquement à chaque changement. Touchez le compteur dans l'en-tête pour forcer une synchro.</p>
+    </div>
+  </section>
+
   <section id="screen-reminders" class="screen">
     <div class="backbar"><button class="back" onclick="go('list')">‹ Carnet</button><div class="spacer"></div><span class="count">Rappels</span></div>
     <div class="rem-group" id="remindersBody"></div>
@@ -211,6 +242,64 @@ function tx(m){return db.transaction(STORE,m).objectStore(STORE);}
 function dbAll(){return new Promise(r=>{const o=tx('readonly').getAll(); o.onsuccess=()=>r(o.result||[]);});}
 function dbPut(c){return new Promise(r=>{const o=tx('readwrite').put(c); o.onsuccess=()=>r();});}
 function dbDel(id){return new Promise(r=>{const o=tx('readwrite').delete(id); o.onsuccess=()=>r();});}
+
+/* ========== SUPABASE SYNC ========== */
+const SB={url:localStorage.getItem('sb_url')||'', key:localStorage.getItem('sb_key')||''};
+function sbEnabled(){return !!(SB.url&&SB.key);}
+function sbHeaders(){return {'apikey':SB.key,'authorization':'Bearer '+SB.key,'content-type':'application/json'};}
+let syncState='idle'; // idle | syncing | ok | error | off
+function setSync(s,msg){syncState=s; const b=$('syncBadge'); if(!b)return;
+  const map={idle:'',syncing:'⟳ sync…',ok:'✓ sync',error:'⚠ sync',off:'○ local'};
+  b.textContent=sbEnabled()?(map[s]||''):map.off; b.title=msg||'';}
+async function sbPush(c){ // upsert one contact
+  if(!sbEnabled())return;
+  try{await fetch(SB.url+'/rest/v1/carnet?on_conflict=id',{method:'POST',
+    headers:{...sbHeaders(),'prefer':'resolution=merge-duplicates'},
+    body:JSON.stringify({id:c.id,data:c,updated_at:new Date(c.updated_at||Date.now()).toISOString()})});
+  }catch(e){setSync('error',e.message);}
+}
+async function sbPushAll(){if(!sbEnabled())return; for(const c of contacts) await sbPush(c);}
+async function sbPullMerge(){ // fetch remote, merge by updated_at, return true if local changed
+  if(!sbEnabled())return false;
+  const r=await fetch(SB.url+'/rest/v1/carnet?select=id,data,updated_at',{headers:sbHeaders()});
+  if(!r.ok) throw new Error('Lecture distante '+r.status);
+  const rows=await r.json(); let changed=false;
+  const localById={}; contacts.forEach(c=>localById[c.id]=c);
+  for(const row of rows){
+    const remote=row.data; remote.updated_at=remote.updated_at||new Date(row.updated_at).getTime();
+    const local=localById[row.id];
+    if(!local || (remote.updated_at||0) > (local.updated_at||0)){
+      // remote wins
+      if(remote.deleted){ if(local){contacts=contacts.filter(x=>x.id!==row.id); await dbDel(row.id); changed=true;} }
+      else { const idx=contacts.findIndex(x=>x.id===row.id);
+        if(idx>=0) contacts[idx]=remote; else contacts.push(remote);
+        await dbPut(remote); changed=true; }
+    } else if(local && (local.updated_at||0) > (remote.updated_at||0)){
+      await sbPush(local); // local newer, push it up
+    }
+  }
+  // push any purely-local contacts not present remotely
+  const remoteIds=new Set(rows.map(r=>r.id));
+  for(const c of contacts){ if(!remoteIds.has(c.id)) await sbPush(c); }
+  return changed;
+}
+let syncTimer=null;
+function scheduleSync(){ if(!sbEnabled()){setSync('off');return;}
+  setSync('syncing'); clearTimeout(syncTimer);
+  syncTimer=setTimeout(async()=>{ try{ const ch=await sbPullMerge(); setSync('ok'); if(ch){renderList($('search').value);} }
+    catch(e){setSync('error',e.message);} },400);
+}
+async function syncNow(){ if(!sbEnabled()){go('settings');return;}
+  setSync('syncing'); try{ const ch=await sbPullMerge(); await sbPushAll(); setSync('ok'); renderList($('search').value);
+    if($('screen-detail').classList.contains('active')&&currentId)openDetail(currentId); }
+  catch(e){setSync('error',e.message); alert('Synchro impossible : '+e.message);} }
+
+/* save = local write + stamp + remote push */
+async function save(c){ c.updated_at=Date.now(); await dbPut(c); sbPush(c); }
+async function removeContact(c){ // soft-delete so other devices learn about it
+  c.deleted=true; c.updated_at=Date.now(); await dbPut(c); await sbPush(c);
+  contacts=contacts.filter(x=>x.id!==c.id); await dbDel(c.id);
+}
 
 let contacts=[], currentId=null, editingId=null, enrichMode='paste', reviewData=null;
 const $=id=>document.getElementById(id);
@@ -271,7 +360,7 @@ function openDetail(id){
   const rels=(c.relations||[]); let relHtml='';
   if(rels.length){relHtml='<div class="sec"><h3>Relations mentionnées</h3>'+rels.map(r=>{
     const exist=findByName(r.name);
-    if(exist) return `<span class="chip" onclick="openDetail('${exist.id}')">${esc(r.name)}${r.context?` · ${esc(r.context)}`:''} <span class="arr">›</span></span>`;
+    if(exist) return `<span class="chip" onclick="openDetail('${exist.id}')">${esc(r.name)}${exist.role?` · ${esc(exist.role)}`:''} <span class="arr">›</span></span>`;
     return `<span class="chip ghost" onclick="createFromMention(${JSON.stringify(r.name).replace(/"/g,'&quot;')},${JSON.stringify(r.context||'').replace(/"/g,'&quot;')})">${esc(r.name)} <span class="arr">+</span></span>`;
   }).join('')+'</div>';}
 
@@ -307,14 +396,14 @@ function openDetail(id){
 function openNote(){const c=contacts.find(x=>x.id===currentId); $('noteFor').textContent='Pour '+(c?.name||''); $('note-body').value=''; go('note');}
 $('noteSave').onclick=async()=>{const body=$('note-body').value.trim(); if(!body)return;
   const c=contacts.find(x=>x.id===currentId); c.notes=c.notes||[]; c.notes.push({id:uid(),ts:Date.now(),body,analyzed:false});
-  await dbPut(c); openDetail(currentId); renderList($('search').value);};
+  await save(c); openDetail(currentId); renderList($('search').value);};
 async function delNote(nid){if(!confirm('Supprimer cette note ?'))return;
-  const c=contacts.find(x=>x.id===currentId); c.notes=(c.notes||[]).filter(n=>n.id!==nid); await dbPut(c); openDetail(currentId);}
+  const c=contacts.find(x=>x.id===currentId); c.notes=(c.notes||[]).filter(n=>n.id!==nid); await save(c); openDetail(currentId);}
 
 async function toggleRem(cid,rid){const c=contacts.find(x=>x.id===cid); const r=(c.reminders||[]).find(x=>x.id===rid);
-  if(r){r.done=!r.done; await dbPut(c);} if($('screen-detail').classList.contains('active'))openDetail(cid); else openReminders(); renderList($('search').value);}
+  if(r){r.done=!r.done; await save(c);} if($('screen-detail').classList.contains('active'))openDetail(cid); else openReminders(); renderList($('search').value);}
 async function delRem(cid,rid){const c=contacts.find(x=>x.id===cid); c.reminders=(c.reminders||[]).filter(x=>x.id!==rid);
-  await dbPut(c); if($('screen-detail').classList.contains('active'))openDetail(cid); else openReminders(); renderList($('search').value);}
+  await save(c); if($('screen-detail').classList.contains('active'))openDetail(cid); else openReminders(); renderList($('search').value);}
 function openReminders(){
   const body=$('remindersBody'); const all=allReminders().filter(r=>!r.done);
   const today=new Date(); today.setHours(23,59,59,999);
@@ -442,22 +531,22 @@ async function applyReview(){
     if(exist){exist.relations=exist.relations||[];
       if(!exist.relations.some(r=>r.name.toLowerCase()===(c.name||'').toLowerCase())) exist.relations.push({name:c.name,context:p.context||''});
       if(p.note){exist.notes=exist.notes||[]; exist.notes.push({id:uid(),ts:Date.now(),body:`(via ${c.name}) ${p.note}`,analyzed:true});}
-      await dbPut(exist);
+      await save(exist);
     } else {
       const nc={id:uid(),created:Date.now(),name:p.name,role:'',edu:'',contact:'',met:`Mentionné·e par ${c.name}`,summary:p.note||p.context||'',notes:[],relations:[{name:c.name,context:p.context||''}],reminders:[]};
-      contacts.push(nc); await dbPut(nc);
+      contacts.push(nc); await save(nc);
     }
   }
   const note=(c.notes||[]).find(n=>n.id===reviewData.noteId); if(note)note.analyzed=true;
-  await dbPut(c); reviewData=null; renderList($('search').value); openDetail(c.id);
+  await save(c); reviewData=null; renderList($('search').value); openDetail(c.id);
 }
 
 async function createFromMention(name,context){
   const cur=currentId?contacts.find(x=>x.id===currentId):null;
   const nc={id:uid(),created:Date.now(),name,role:'',edu:'',contact:'',met:cur?`Mentionné·e par ${cur.name}`:'',summary:context||'',notes:[],
     relations:cur?[{name:cur.name||'',context:context||''}]:[],reminders:[]};
-  if(cur){cur.relations=cur.relations||[]; if(!cur.relations.some(r=>r.name.toLowerCase()===name.toLowerCase())) cur.relations.push({name,context:context||''}); await dbPut(cur);}
-  contacts.push(nc); await dbPut(nc); renderList(); openDetail(nc.id);
+  if(cur){cur.relations=cur.relations||[]; if(!cur.relations.some(r=>r.name.toLowerCase()===name.toLowerCase())) cur.relations.push({name,context:context||''}); await save(cur);}
+  contacts.push(nc); await save(nc); renderList(); openDetail(nc.id);
 }
 
 function fillForm(c){$('f-name').value=c?.name||''; $('f-role').value=c?.role||''; $('f-edu').value=c?.edu||'';
@@ -469,15 +558,62 @@ $('formCancel').onclick=()=>editingId?openDetail(editingId):go('list');
 $('formSave').onclick=async()=>{const name=$('f-name').value.trim(); if(!name){$('f-name').focus(); $('f-name').style.borderColor='var(--danger)'; return;}
   let c; if(editingId)c=contacts.find(x=>x.id===editingId); else{c={id:uid(),created:Date.now(),notes:[],relations:[],reminders:[]}; contacts.push(c);}
   c.name=name; c.role=$('f-role').value.trim(); c.edu=$('f-edu').value.trim(); c.contact=$('f-contact').value.trim(); c.met=$('f-met').value.trim(); c.summary=$('f-summary').value.trim();
-  await dbPut(c); renderList($('search').value); openDetail(c.id);};
-$('formDelete').onclick=async()=>{if(!confirm('Supprimer ce contact et toutes ses notes ?'))return; await dbDel(editingId); contacts=contacts.filter(x=>x.id!==editingId); renderList($('search').value); go('list');};
+  await save(c); renderList($('search').value); openDetail(c.id);};
+$('formDelete').onclick=async()=>{if(!confirm('Supprimer ce contact et toutes ses notes ?'))return; const c=contacts.find(x=>x.id===editingId); await removeContact(c); renderList($('search').value); go('list');};
 
 $('search').oninput=e=>renderList(e.target.value);
 $('f-name').oninput=()=>{$('f-name').style.borderColor='';};
 
+/* ========== SETTINGS / SYNC UI ========== */
+function openSettings(){ $('sb-url').value=SB.url; $('sb-key').value=SB.key; $('sb-status').textContent=''; $('sb-status').className='ai-status'; go('settings'); }
+$('sb-save').onclick=async()=>{
+  const url=$('sb-url').value.trim().replace(/\/$/,''); const key=$('sb-key').value.trim();
+  const st=$('sb-status');
+  if(!url||!key){st.className='ai-status err'; st.textContent='Renseignez les deux champs.'; return;}
+  st.className='ai-status'; st.innerHTML='<span class="spinner"></span>Connexion…';
+  SB.url=url; SB.key=key;
+  try{
+    const r=await fetch(SB.url+'/rest/v1/carnet?select=id&limit=1',{headers:sbHeaders()});
+    if(!r.ok){const t=await r.text(); throw new Error(r.status+' — '+t.slice(0,120));}
+    localStorage.setItem('sb_url',url); localStorage.setItem('sb_key',key);
+    st.className='ai-status'; st.innerHTML='<span class="spinner"></span>Première synchronisation…';
+    await sbPullMerge(); await sbPushAll();
+    setSync('ok'); renderList($('search').value);
+    st.className='ai-status ok'; st.textContent='✓ Synchronisation active sur cet appareil.';
+  }catch(e){ SB.url=localStorage.getItem('sb_url')||''; SB.key=localStorage.getItem('sb_key')||'';
+    st.className='ai-status err'; st.textContent='⚠ Échec : '+e.message+'. Vérifiez l\'URL, la clé et que la table « carnet » existe.'; }
+};
+$('exportBtn').onclick=()=>{
+  const blob=new Blob([JSON.stringify({app:'carnet',exportedAt:new Date().toISOString(),contacts},null,2)],{type:'application/json'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+  a.download='carnet-'+new Date().toISOString().slice(0,10)+'.json'; a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),2000);
+  $('io-status').className='ai-status ok'; $('io-status').textContent='✓ Fichier exporté.';
+};
+$('importBtn').onclick=()=>$('importFile').click();
+$('importFile').onchange=e=>{
+  const file=e.target.files[0]; if(!file)return; const rd=new FileReader();
+  rd.onload=async()=>{ try{
+    const obj=JSON.parse(rd.result); const arr=Array.isArray(obj)?obj:obj.contacts; if(!Array.isArray(arr))throw new Error('Format non reconnu');
+    if(!confirm(`Importer ${arr.length} contact(s) ? Les fiches de même identifiant seront fusionnées (la plus récente gagne).`))return;
+    for(const inc of arr){ const local=contacts.find(x=>x.id===inc.id);
+      if(!local || (inc.updated_at||0)>=(local.updated_at||0)){
+        inc.relations=inc.relations||[]; inc.reminders=inc.reminders||[]; inc.notes=inc.notes||[];
+        const idx=contacts.findIndex(x=>x.id===inc.id); if(idx>=0)contacts[idx]=inc; else contacts.push(inc);
+        await dbPut(inc); sbPush(inc);
+      } }
+    renderList($('search').value); $('io-status').className='ai-status ok'; $('io-status').textContent='✓ Import terminé.';
+  }catch(err){$('io-status').className='ai-status err'; $('io-status').textContent='⚠ '+err.message;} };
+  rd.readAsText(file); e.target.value='';
+};
+
 (async function(){await openDB(); contacts=await dbAll();
-  contacts.forEach(c=>{c.relations=c.relations||[]; c.reminders=c.reminders||[]; (c.notes||[]).forEach(n=>{if(n.analyzed===undefined)n.analyzed=false;});});
-  setEnrichMode('paste'); renderList();})();
+  contacts.forEach(c=>{c.relations=c.relations||[]; c.reminders=c.reminders||[]; c.updated_at=c.updated_at||c.created||Date.now(); (c.notes||[]).forEach(n=>{if(n.analyzed===undefined)n.analyzed=false;});});
+  setEnrichMode('paste'); renderList();
+  if(sbEnabled()){ setSync('syncing'); try{ await sbPullMerge(); await sbPushAll(); setSync('ok'); renderList($('search').value); }catch(e){setSync('error',e.message);} }
+  else setSync('off');
+  document.addEventListener('visibilitychange',()=>{ if(!document.hidden && sbEnabled()) scheduleSync(); });
+})();
 </script>
 </body>
 </html>
