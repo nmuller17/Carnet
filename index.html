@@ -385,10 +385,12 @@ function openDetail(id){
     metaBits.push(isUrl?`<a href="${esc(c.contact.startsWith('http')?c.contact:'https://'+c.contact)}" target="_blank" rel="noopener">${esc(c.contact)}</a>`:esc(c.contact));}
 
   const rels=(c.relations||[]); let relHtml='';
-  if(rels.length){relHtml='<div class="sec"><h3>Relations mentionnées</h3>'+rels.map(r=>{
-    const exist=findByName(r.name);
-    if(exist) return `<span class="chip" onclick="openDetail('${exist.id}')">${esc(r.name)}${exist.role?` · ${esc(exist.role)}`:''} <span class="arr">›</span></span>`;
-    return `<span class="chip ghost" onclick="createFromMention(${JSON.stringify(r.name).replace(/"/g,'&quot;')},${JSON.stringify(r.context||'').replace(/"/g,'&quot;')})">${esc(r.name)} <span class="arr">+</span></span>`;
+  if(rels.length){relHtml='<div class="sec"><h3>Relations mentionnées</h3>'+rels.map((r,ri)=>{
+    let exist = r.targetId ? contacts.find(x=>x.id===r.targetId) : null;
+    if(!exist) exist = findByName(r.name);
+    if(exist){const disp=exist.name||r.name;
+      return `<span class="chip" onclick="openDetail('${exist.id}')">${esc(disp)}${exist.role?` · ${esc(exist.role)}`:''} <span class="arr">›</span></span>`;}
+    return `<span class="chip ghost" onclick="createFromMention(${JSON.stringify(r.name).replace(/"/g,'&quot;')},${JSON.stringify(r.context||'').replace(/"/g,'&quot;')},'${c.id}',${ri})">${esc(r.name)} <span class="arr">+</span></span>`;
   }).join('')+'</div>';}
 
   const rems=(c.reminders||[]).slice().sort((a,b)=>(a.done?1:0)-(b.done?1:0)||(a.due||'').localeCompare(b.due||'')); let remHtml='';
@@ -554,26 +556,37 @@ async function applyReview(){
   c.relations=c.relations||[];
   for(let i=0;i<(o.people||[]).length;i++){
     if(!a.people[i])continue; const p=o.people[i];
-    if(!c.relations.some(r=>r.name.toLowerCase()===p.name.toLowerCase())) c.relations.push({name:p.name,context:p.context||''});
     const exist=findByName(p.name);
+    // forward relation c -> p (store targetId if the person exists)
+    let fwd=c.relations.find(r=>(exist&&r.targetId===exist.id)||r.name.toLowerCase()===p.name.toLowerCase());
+    if(!fwd){fwd={name:p.name,context:p.context||''}; c.relations.push(fwd);}
+    if(exist) fwd.targetId=exist.id;
     if(exist){exist.relations=exist.relations||[];
-      if(!exist.relations.some(r=>r.name.toLowerCase()===(c.name||'').toLowerCase())) exist.relations.push({name:c.name,context:p.context||''});
+      let back=exist.relations.find(r=>r.targetId===c.id||r.name.toLowerCase()===(c.name||'').toLowerCase());
+      if(!back){back={name:c.name,context:p.context||''}; exist.relations.push(back);}
+      back.targetId=c.id;
       if(p.note){exist.notes=exist.notes||[]; exist.notes.push({id:uid(),ts:Date.now(),body:`(via ${c.name}) ${p.note}`,analyzed:true});}
       await save(exist);
     } else {
-      const nc={id:uid(),created:Date.now(),name:p.name,role:'',edu:'',contact:'',met:`Mentionné·e par ${c.name}`,summary:p.note||p.context||'',notes:[],relations:[{name:c.name,context:p.context||''}],reminders:[]};
+      const nc={id:uid(),created:Date.now(),name:p.name,role:'',edu:'',contact:'',met:`Mentionné·e par ${c.name}`,summary:p.note||p.context||'',notes:[],relations:[{name:c.name,context:p.context||'',targetId:c.id}],reminders:[]};
       contacts.push(nc); await save(nc);
+      fwd.targetId=nc.id; // link forward relation to the freshly created fiche
     }
   }
   const note=(c.notes||[]).find(n=>n.id===reviewData.noteId); if(note)note.analyzed=true;
   await save(c); reviewData=null; renderList($('search').value); openDetail(c.id);
 }
 
-async function createFromMention(name,context){
-  const cur=currentId?contacts.find(x=>x.id===currentId):null;
+async function createFromMention(name,context,originId,relIdx){
+  const cur = originId ? contacts.find(x=>x.id===originId) : (currentId?contacts.find(x=>x.id===currentId):null);
   const nc={id:uid(),created:Date.now(),name,role:'',edu:'',contact:'',met:cur?`Mentionné·e par ${cur.name}`:'',summary:context||'',notes:[],
-    relations:cur?[{name:cur.name||'',context:context||''}]:[],reminders:[]};
-  if(cur){cur.relations=cur.relations||[]; if(!cur.relations.some(r=>r.name.toLowerCase()===name.toLowerCase())) cur.relations.push({name,context:context||''}); await save(cur);}
+    relations:cur?[{name:cur.name||'',context:context||'',targetId:cur.id}]:[],reminders:[]};
+  if(cur){cur.relations=cur.relations||[];
+    let rel = (relIdx!=null && cur.relations[relIdx]) ? cur.relations[relIdx]
+            : cur.relations.find(r=>r.name.toLowerCase()===name.toLowerCase());
+    if(rel){ rel.targetId=nc.id; }
+    else { cur.relations.push({name,context:context||'',targetId:nc.id}); }
+    await save(cur);}
   contacts.push(nc); await save(nc); renderList(); openDetail(nc.id);
 }
 
@@ -584,9 +597,32 @@ function openNew(){editingId=null; $('formTitle').textContent='Nouveau contact';
 $('editBtn').onclick=()=>{const c=contacts.find(x=>x.id===currentId); editingId=currentId; $('formTitle').textContent='Modifier'; $('formDelete').style.display='block'; fillForm(c); go('form');};
 $('formCancel').onclick=()=>editingId?openDetail(editingId):go('list');
 $('formSave').onclick=async()=>{const name=$('f-name').value.trim(); if(!name){$('f-name').focus(); $('f-name').style.borderColor='var(--danger)'; return;}
-  let c; if(editingId)c=contacts.find(x=>x.id===editingId); else{c={id:uid(),created:Date.now(),notes:[],relations:[],reminders:[]}; contacts.push(c);}
+  let c; const wasNew=!editingId; let oldName='';
+  if(editingId){c=contacts.find(x=>x.id===editingId); oldName=c.name||'';}
+  else{c={id:uid(),created:Date.now(),notes:[],relations:[],reminders:[]}; contacts.push(c);}
   c.name=name; c.role=$('f-role').value.trim(); c.edu=$('f-edu').value.trim(); c.contact=$('f-contact').value.trim(); c.met=$('f-met').value.trim(); c.summary=$('f-summary').value.trim();
-  await save(c); renderList($('search').value); openDetail(c.id);};
+  await save(c);
+  await reconcileRelations(c, oldName);
+  renderList($('search').value); openDetail(c.id);};
+
+/* When a fiche is created/renamed, attach matching relations on other contacts to its id,
+   so a corrected spelling repairs the link and updates the displayed name everywhere. */
+async function reconcileRelations(c, oldName){
+  const newN=(c.name||'').trim().toLowerCase();
+  const oldN=(oldName||'').trim().toLowerCase();
+  for(const other of contacts){
+    if(other.id===c.id || !other.relations) continue;
+    let touched=false;
+    other.relations.forEach(r=>{
+      const rn=(r.name||'').trim().toLowerCase();
+      // already linked to this fiche -> refresh its display name to the corrected spelling
+      if(r.targetId===c.id){ if(r.name!==c.name){r.name=c.name; touched=true;} return; }
+      // not yet linked, but the relation text matches the old or new spelling -> attach by id
+      if(!r.targetId && rn && (rn===newN || (oldN && rn===oldN))){ r.targetId=c.id; r.name=c.name; touched=true; }
+    });
+    if(touched) await save(other);
+  }
+}
 $('formDelete').onclick=async()=>{if(!confirm('Supprimer ce contact et toutes ses notes ?'))return; const c=contacts.find(x=>x.id===editingId); await removeContact(c); renderList($('search').value); go('list');};
 
 $('search').oninput=e=>renderList(e.target.value);
@@ -598,7 +634,7 @@ function contactContext(c){
   const notes=[...(c.notes||[])].sort((a,b)=>a.ts-b.ts)
     .map(n=>`- [${fullDate(n.ts)}] ${n.body}`).join('\n')||'(aucune note)';
   const rems=(c.reminders||[]).filter(r=>!r.done).map(r=>`- ${r.text}${r.due?' (échéance '+fullDate(new Date(r.due).getTime())+')':''}`).join('\n')||'(aucun)';
-  const rels=(c.relations||[]).map(r=>`- ${r.name}${r.context?' ('+r.context+')':''}`).join('\n')||'(aucune)';
+  const rels=(c.relations||[]).map(r=>{const t=r.targetId?contacts.find(x=>x.id===r.targetId):null; const nm=t?t.name:r.name; return `- ${nm}${r.context?' ('+r.context+')':''}`;}).join('\n')||'(aucune)';
   return `### ${c.name}\nPoste: ${c.role||'?'}\nParcours: ${c.edu||'?'}\nCoordonnées: ${c.contact||'?'}\nRencontre: ${c.met||'?'}\nÀ retenir: ${c.summary||'?'}\nDernier contact: ${relDate(lastTouch(c))}\nNotes d'échanges:\n${notes}\nRappels en cours:\n${rems}\nRelations:\n${rels}`;
 }
 function carnetOverview(){
@@ -728,6 +764,10 @@ $('importFile').onchange=e=>{
 
 (async function(){await openDB(); contacts=await dbAll();
   contacts.forEach(c=>{c.relations=c.relations||[]; c.reminders=c.reminders||[]; c.updated_at=c.updated_at||c.created||Date.now(); (c.notes||[]).forEach(n=>{if(n.analyzed===undefined)n.analyzed=false;});});
+  // one-time catch-up: link existing name-based relations to a fiche id when one matches
+  contacts.forEach(c=>{ (c.relations||[]).forEach(r=>{
+    if(!r.targetId){ const m=findByName(r.name); if(m && m.id!==c.id){ r.targetId=m.id; r.name=m.name; } }
+  });});
   setEnrichMode('paste'); renderList();
   if(sbEnabled()){ setSync('syncing'); try{ await sbPullMerge(); await sbPushAll(); setSync('ok'); renderList($('search').value); }catch(e){setSync('error',e.message);} }
   else setSync('off');
