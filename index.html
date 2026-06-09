@@ -347,11 +347,15 @@ function findByName(name){if(!name)return null; const n=name.trim().toLowerCase(
 function allReminders(){const out=[]; contacts.forEach(c=>(c.reminders||[]).forEach(r=>out.push({...r,contactId:c.id,contactName:c.name}))); return out;}
 function pendingCount(){return allReminders().filter(r=>!r.done).length;}
 function refreshBell(){const n=pendingCount(); const d=$('bellDot'); if(n>0){d.style.display='flex'; d.textContent=n;} else d.style.display='none';}
-function appleReminderLink(title,iso){
-  const dt=iso? new Date(iso): new Date(Date.now()+86400000);
-  const stamp=d=>d.toISOString().replace(/[-:]/g,'').split('.')[0]+'Z';
-  const ics=['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//Carnet//FR','BEGIN:VTODO','DTSTAMP:'+stamp(new Date()),'DUE:'+stamp(dt),'SUMMARY:'+String(title).replace(/\n/g,' '),'END:VTODO','END:VCALENDAR'].join('\r\n');
-  return 'data:text/calendar;charset=utf8,'+encodeURIComponent(ics);
+async function sendToReminders(cid,rid){
+  const c=contacts.find(x=>x.id===cid); const r=c&&(c.reminders||[]).find(x=>x.id===rid); if(!r)return;
+  const due = r.due ? ' (échéance '+fullDate(new Date(r.due).getTime())+')' : '';
+  const payload = r.text + due;
+  let copied=false;
+  try{ await navigator.clipboard.writeText(payload); copied=true; }
+  catch(e){ try{ const ta=document.createElement('textarea'); ta.value=payload; ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); copied=true; }catch(_){} }
+  window.location.href='x-apple-reminderkit://';
+  setTimeout(()=>{ if(!document.hidden) alert(copied?'Rappel copié. Dans l\'app Rappels : nouveau rappel, puis collez (appui long → Coller).':'Texte du rappel : '+payload); },600);
 }
 
 function go(s){document.querySelectorAll('.screen').forEach(x=>x.classList.remove('active'));
@@ -398,7 +402,7 @@ function openDetail(id){
     <div class="rem ${r.done?'rdone':''}"><div class="rtxt">${esc(r.text)}</div>
     ${r.due?`<div class="rdate">échéance : ${fullDate(new Date(r.due).getTime())}</div>`:''}
     <div class="ract"><span class="mini ${r.done?'done':''}" onclick="toggleRem('${c.id}','${r.id}')">${r.done?'✓ fait':'marquer fait'}</span>
-    <a class="mini" href="${appleReminderLink(r.text,r.due)}">→ Rappels Apple</a>
+    <a class="mini" onclick="sendToReminders('${c.id}','${r.id}')">→ Rappels Apple</a>
     <span class="mini" onclick="delRem('${c.id}','${r.id}')">supprimer</span></div></div>`).join('')+'</div>';}
 
   $('detailBody').innerHTML=`
@@ -448,7 +452,7 @@ function openReminders(){
       <div class="rwho" onclick="openDetail('${r.contactId}')">${esc(r.contactName)} ›</div>
       ${r.due?`<div class="rdate">${fullDate(new Date(r.due).getTime())}</div>`:'<div class="rdate">sans date</div>'}</div></div>
     <div class="ract"><span class="mini ${r.done?'done':''}" onclick="toggleRem('${r.contactId}','${r.id}')">${r.done?'✓ fait':'marquer fait'}</span>
-      <a class="mini" href="${appleReminderLink(r.text,r.due)}">→ Rappels Apple</a>
+      <a class="mini" onclick="sendToReminders('${r.contactId}','${r.id}')">→ Rappels Apple</a>
       <span class="mini" onclick="delRem('${r.contactId}','${r.id}')">supprimer</span></div></div>`;}
   function block(title,arr,cls){if(!arr.length)return''; return `<h3 class="${cls||''}">${title}</h3>`+arr.map(remCard).join('');}
   let html='';
