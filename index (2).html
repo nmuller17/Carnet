@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Carnet">
+<meta name="theme-color" content="#1a1714">
+<title>Carnet</title>
+<link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 180 180'%3E%3Crect width='180' height='180' rx='40' fill='%231a1714'/%3E%3Ctext x='90' y='124' font-family='Georgia,serif' font-size='100' font-style='italic' fill='%23e8dcc4' text-anchor='middle'%3EC%3C/text%3E%3C/svg%3E">
+<style>
+  :root{
+    --ink:#1a1714; --ink-soft:#4a423a; --ink-faint:#8a7d6e;
+    --paper:#f4efe4; --paper-warm:#ebe3d3; --paper-deep:#e0d6c2;
+    --accent:#9c4221; --accent-soft:#c2693f;
+    --line:#d8cdb8; --line-soft:#e4dac6;
+    --danger:#8a3324;
+    --serif:'Iowan Old Style','Palatino Linotype',Palatino,Georgia,serif;
+    --sans:-apple-system,'SF Pro Text',system-ui,sans-serif;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+  html,body{height:100%;}
+  body{
+    font-family:var(--sans); background:var(--paper); color:var(--ink);
+    -webkit-font-smoothing:antialiased; overflow:hidden;
+    overscroll-behavior:none;
+  }
+  body::before{
+    content:""; position:fixed; inset:0; pointer-events:none; z-index:0;
+    background:
+      radial-gradient(circle at 20% 10%, rgba(156,66,33,.04), transparent 40%),
+      radial-gradient(circle at 80% 90%, rgba(26,23,20,.05), transparent 45%);
+  }
+  .app{
+    position:relative; z-index:1; height:100%; display:flex; flex-direction:column;
+    max-width:560px; margin:0 auto;
+    padding-top:env(safe-area-inset-top);
+    padding-bottom:env(safe-area-inset-bottom);
+  }
+  .screen{flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch; display:none;}
+  .screen.active{display:block;}
+
+  /* ---- Header ---- */
+  header.top{
+    padding:18px 22px 14px; display:flex; align-items:baseline; justify-content:space-between;
+    border-bottom:1px solid var(--line);
+  }
+  header.top .mast{font-family:var(--serif); font-style:italic; font-size:30px; letter-spacing:.5px;}
+  header.top .count{font-size:12px; color:var(--ink-faint); letter-spacing:.08em; text-transform:uppercase;}
+  .backbar{
+    display:flex; align-items:center; gap:14px; padding:16px 18px 12px;
+    border-bottom:1px solid var(--line);
+  }
+  .backbar button.back{
+    background:none; border:none; font-family:var(--serif); font-size:17px; color:var(--accent);
+    cursor:pointer; padding:4px 0;
+  }
+  .backbar .spacer{flex:1;}
+  .iconbtn{
+    background:none; border:1px solid var(--line); border-radius:8px; padding:7px 11px;
+    font-size:13px; font-family:var(--sans); color:var(--ink-soft); cursor:pointer;
+  }
+  .iconbtn.danger{color:var(--danger); border-color:#e0c5bc;}
+
+  /* ---- Search ---- */
+  .searchwrap{padding:14px 18px 6px;}
+  .searchwrap input{
+    width:100%; padding:12px 14px; border:1px solid var(--line); border-radius:12px;
+    background:var(--paper-warm); font-size:16px; font-family:var(--sans); color:var(--ink);
+  }
+  .searchwrap input::placeholder{color:var(--ink-faint);}
+
+  /* ---- Contact list ---- */
+  .list{padding:6px 14px 120px;}
+  .empty{
+    text-align:center; padding:70px 30px; color:var(--ink-faint);
+  }
+  .empty .glyph{font-family:var(--serif); font-style:italic; font-size:56px; color:var(--line); margin-bottom:8px;}
+  .empty p{font-size:15px; line-height:1.5;}
+  .card{
+    background:var(--paper-warm); border:1px solid var(--line-soft); border-radius:14px;
+    padding:15px 16px; margin:8px 4px; cursor:pointer; position:relative;
+    transition:transform .12s ease;
+  }
+  .card:active{transform:scale(.985);}
+  .card .row1{display:flex; align-items:baseline; gap:10px;}
+  .card .nm{font-family:var(--serif); font-size:21px; font-weight:600; line-height:1.1;}
+  .card .when{margin-left:auto; font-size:11px; color:var(--ink-faint); white-space:nowrap;}
+  .card .role{font-size:13.5px; color:var(--ink-soft); margin-top:3px; line-height:1.35;}
+  .card .tagline{font-size:13px; color:var(--ink-faint); margin-top:7px; font-style:italic;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .card .badge{
+    position:absolute; top:14px; right:14px; display:none;
+  }
+  .card .pulse{
+    display:inline-block; width:7px; height:7px; border-radius:50%; background:var(--accent);
+    margin-right:5px; vertical-align:middle;
+  }
+
+  /* ---- FAB ---- */
+  .fab{
+    position:fixed; right:max(20px,calc(50% - 280px + 20px)); bottom:calc(24px + env(safe-area-inset-bottom));
+    width:60px; height:60px; border-radius:50%; background:var(--ink); color:var(--paper);
+    border:none; font-size:30px; font-family:var(--serif); cursor:pointer; z-index:20;
+    box-shadow:0 6px 20px rgba(26,23,20,.3); display:flex; align-items:center; justify-content:center;
+    line-height:1; padding-bottom:3px;
+  }
+  .fab:active{transform:scale(.92);}
+
+  /* ---- Detail / Edit ---- */
+  .detail{padding:4px 20px 130px;}
+  .detail .hero{padding:18px 2px 16px; border-bottom:1px solid var(--line);}
+  .detail .hero .nm{font-family:var(--serif); font-size:32px; font-weight:600; line-height:1.05;}
+  .detail .hero .role{font-size:15px; color:var(--ink-soft); margin-top:6px; line-height:1.4;}
+  .detail .hero .meta{font-size:13px; color:var(--ink-faint); margin-top:8px; line-height:1.5;}
+  .detail .hero a{color:var(--accent); text-decoration:none;}
+
+  .sec{margin-top:24px;}
+  .sec h3{
+    font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--ink-faint);
+    margin-bottom:10px; font-weight:600;
+  }
+  .field-line{font-size:15px; line-height:1.55; color:var(--ink-soft); margin-bottom:4px;}
+  .field-line b{color:var(--ink); font-weight:600;}
+
+  /* notes */
+  .note{
+    background:var(--paper-warm); border:1px solid var(--line-soft); border-radius:12px;
+    padding:12px 14px; margin-bottom:10px; position:relative;
+  }
+  .note .nt-date{font-size:11px; color:var(--ink-faint); letter-spacing:.05em; margin-bottom:5px; text-transform:uppercase;}
+  .note .nt-body{font-size:15px; line-height:1.55; color:var(--ink); white-space:pre-wrap;}
+  .note .nt-del{
+    position:absolute; top:8px; right:10px; background:none; border:none; color:var(--ink-faint);
+    font-size:16px; cursor:pointer; padding:4px;
+  }
+
+  /* forms */
+  .formgrid{padding:6px 20px 130px;}
+  label.fl{display:block; font-size:12px; letter-spacing:.08em; text-transform:uppercase;
+    color:var(--ink-faint); margin:16px 0 6px; font-weight:600;}
+  input.f, textarea.f, select.f{
+    width:100%; padding:12px 14px; border:1px solid var(--line); border-radius:11px;
+    background:var(--paper-warm); font-size:16px; font-family:var(--sans); color:var(--ink);
+    resize:vertical;
+  }
+  textarea.f{min-height:92px; line-height:1.5;}
+  .hint{font-size:12.5px; color:var(--ink-faint); margin-top:5px; line-height:1.4;}
+  .mic-hint{display:flex; align-items:center; gap:6px; margin-top:6px; color:var(--accent-soft); font-size:12.5px;}
+
+  .btn{
+    width:100%; padding:15px; border-radius:12px; border:none; font-size:16px; font-weight:600;
+    font-family:var(--sans); cursor:pointer; margin-top:8px;
+  }
+  .btn.primary{background:var(--ink); color:var(--paper);}
+  .btn.primary:active{opacity:.85;}
+  .btn.ghost{background:none; border:1px solid var(--line); color:var(--ink-soft);}
+  .btn-row{display:flex; gap:10px; margin-top:20px;}
+  .btn-row .btn{margin-top:0;}
+
+  /* AI enrich panel */
+  .ai-panel{
+    border:1px dashed var(--accent-soft); border-radius:14px; padding:16px; margin-top:8px;
+    background:rgba(156,66,33,.035);
+  }
+  .ai-panel .ai-title{font-family:var(--serif); font-style:italic; font-size:18px; margin-bottom:4px;}
+  .ai-panel .ai-sub{font-size:13px; color:var(--ink-soft); line-height:1.45; margin-bottom:12px;}
+  .seg{display:flex; gap:8px; margin-bottom:12px; background:var(--paper-deep); padding:4px; border-radius:10px;}
+  .seg button{
+    flex:1; padding:9px; border:none; border-radius:7px; background:none; font-size:13px;
+    font-family:var(--sans); color:var(--ink-soft); cursor:pointer; font-weight:600;
+  }
+  .seg button.on{background:var(--paper); color:var(--ink); box-shadow:0 1px 3px rgba(0,0,0,.08);}
+  .ai-status{font-size:13px; margin-top:10px; line-height:1.45;}
+  .ai-status.err{color:var(--danger);}
+  .ai-status.ok{color:#3a6b3a;}
+  .spinner{
+    display:inline-block; width:14px; height:14px; border:2px solid var(--line);
+    border-top-color:var(--accent); border-radius:50%; animation:spin .7s linear infinite;
+    vertical-align:middle; margin-right:6px;
+  }
+  @keyframes spin{to{transform:rotate(360deg);}}
+
+  .keynote{font-size:12px; color:var(--ink-faint); text-align:center; padding:8px 30px 20px; line-height:1.4;}
+
+  @media (prefers-reduced-motion:reduce){*{animation:none!important; transition:none!important;}}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ============ LIST SCREEN ============ -->
+  <section id="screen-list" class="screen active">
+    <header class="top">
+      <span class="mast">Carnet</span>
+      <span class="count" id="contactCount"></span>
+    </header>
+    <div class="searchwrap">
+      <input id="search" type="search" placeholder="Rechercher un nom, un poste…" autocomplete="off">
+    </div>
+    <div class="list" id="contactList"></div>
+  </section>
+
+  <!-- ============ DETAIL SCREEN ============ -->
+  <section id="screen-detail" class="screen">
+    <div class="backbar">
+      <button class="back" onclick="go('list')">‹ Carnet</button>
+      <div class="spacer"></div>
+      <button class="iconbtn" id="editBtn">Modifier</button>
+    </div>
+    <div class="detail" id="detailBody"></div>
+  </section>
+
+  <!-- ============ FORM SCREEN (add/edit) ============ -->
+  <section id="screen-form" class="screen">
+    <div class="backbar">
+      <button class="back" id="formCancel">‹ Annuler</button>
+      <div class="spacer"></div>
+      <span class="count" id="formTitle">Nouveau contact</span>
+    </div>
+    <div class="formgrid">
+      <label class="fl">Nom</label>
+      <input class="f" id="f-name" placeholder="Prénom Nom" autocomplete="off">
+
+      <label class="fl">Poste actuel</label>
+      <input class="f" id="f-role" placeholder="Ex. Directrice produit, Acme" autocomplete="off">
+
+      <label class="fl">Études / parcours</label>
+      <input class="f" id="f-edu" placeholder="Ex. HEC, ancien McKinsey" autocomplete="off">
+
+      <label class="fl">Coordonnées / LinkedIn</label>
+      <input class="f" id="f-contact" placeholder="email, téléphone, URL LinkedIn…" autocomplete="off">
+
+      <label class="fl">Où vous l'avez rencontré·e</label>
+      <input class="f" id="f-met" placeholder="Ex. Conférence Tech, 4 juin" autocomplete="off">
+
+      <label class="fl">À retenir</label>
+      <textarea class="f" id="f-summary" placeholder="Le détail qui résume cette personne. Touchez le micro du clavier pour dicter."></textarea>
+      <div class="mic-hint">🎤 Astuce : utilisez le micro de votre clavier iOS pour dicter.</div>
+
+      <!-- AI enrich -->
+      <div class="ai-panel">
+        <div class="ai-title">Assistant — mettre en forme</div>
+        <div class="ai-sub">Collez un profil brut à structurer, ou laissez l'assistant reformuler ce que vous avez déjà saisi.</div>
+        <div class="seg">
+          <button id="seg-paste" class="on" onclick="setEnrichMode('paste')">Coller un profil</button>
+          <button id="seg-clean" onclick="setEnrichMode('clean')">Reformuler ma saisie</button>
+        </div>
+        <textarea class="f" id="ai-input" placeholder="Collez ici le texte d'un profil (LinkedIn, bio, signature email…)"></textarea>
+        <button class="btn ghost" id="ai-run" style="margin-top:12px;">Mettre en forme avec l'assistant</button>
+        <div class="ai-status" id="ai-status"></div>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn ghost" id="formDelete" style="display:none;">Supprimer</button>
+        <button class="btn primary" id="formSave">Enregistrer</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ ADD NOTE SCREEN ============ -->
+  <section id="screen-note" class="screen">
+    <div class="backbar">
+      <button class="back" onclick="go('detail')">‹ Retour</button>
+      <div class="spacer"></div>
+      <span class="count">Nouvelle note</span>
+    </div>
+    <div class="formgrid">
+      <label class="fl" id="noteFor"></label>
+      <textarea class="f" id="note-body" style="min-height:200px;" placeholder="Décrivez votre échange : ce que vous vous êtes dit, ce qui compte, les suites à donner. Touchez le micro du clavier pour dicter."></textarea>
+      <div class="mic-hint">🎤 Dictée : micro du clavier iOS.</div>
+      <button class="btn primary" id="noteSave" style="margin-top:20px;">Ajouter au carnet</button>
+    </div>
+  </section>
+
+  <button class="fab" id="fab" onclick="openNew()">+</button>
+</div>
+
+<script>
+/* ===================== STORAGE (IndexedDB) ===================== */
+const DB_NAME='carnet-db', STORE='contacts';
+let db;
+function openDB(){
+  return new Promise((res,rej)=>{
+    const r=indexedDB.open(DB_NAME,1);
+    r.onupgradeneeded=e=>{
+      const d=e.target.result;
+      if(!d.objectStoreNames.contains(STORE))
+        d.createObjectStore(STORE,{keyPath:'id'});
+    };
+    r.onsuccess=e=>{db=e.target.result; res();};
+    r.onerror=e=>rej(e);
+  });
+}
+function tx(mode){return db.transaction(STORE,mode).objectStore(STORE);}
+function dbAll(){return new Promise(r=>{const o=tx('readonly').getAll(); o.onsuccess=()=>r(o.result||[]);});}
+function dbPut(c){return new Promise(r=>{const o=tx('readwrite').put(c); o.onsuccess=()=>r();});}
+function dbDel(id){return new Promise(r=>{const o=tx('readwrite').delete(id); o.onsuccess=()=>r();});}
+
+/* ===================== STATE ===================== */
+let contacts=[], currentId=null, editingId=null, enrichMode='paste';
+const $=id=>document.getElementById(id);
+
+/* ===================== UTIL ===================== */
+function uid(){return Date.now().toString(36)+Math.random().toString(36).slice(2,7);}
+function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+function relDate(ts){
+  if(!ts) return '';
+  const d=Math.floor((Date.now()-ts)/86400000);
+  if(d<=0) return "aujourd'hui";
+  if(d===1) return 'hier';
+  if(d<7) return `il y a ${d} j`;
+  if(d<30) return `il y a ${Math.floor(d/7)} sem`;
+  if(d<365) return `il y a ${Math.floor(d/30)} mois`;
+  return `il y a ${Math.floor(d/365)} an${d>=730?'s':''}`;
+}
+function fullDate(ts){
+  return new Date(ts).toLocaleDateString('fr-FR',{day:'numeric',month:'long',year:'numeric'});
+}
+function lastTouch(c){
+  const notes=c.notes||[];
+  return notes.length? notes[notes.length-1].ts : c.created;
+}
+
+/* ===================== NAVIGATION ===================== */
+function go(screen){
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+  $('screen-'+screen).classList.add('active');
+  $('fab').style.display = (screen==='list')?'flex':'none';
+  document.querySelector('.screen.active').scrollTop=0;
+}
+
+/* ===================== LIST RENDER ===================== */
+function renderList(filter=''){
+  const list=$('contactList');
+  const f=filter.trim().toLowerCase();
+  let arr=[...contacts];
+  if(f) arr=arr.filter(c=>(c.name+' '+(c.role||'')+' '+(c.edu||'')+' '+(c.summary||'')).toLowerCase().includes(f));
+  arr.sort((a,b)=>lastTouch(b)-lastTouch(a));
+
+  $('contactCount').textContent = contacts.length? `${contacts.length} contact${contacts.length>1?'s':''}` : '';
+
+  if(!arr.length){
+    list.innerHTML = contacts.length
+      ? `<div class="empty"><div class="glyph">∅</div><p>Aucun résultat.</p></div>`
+      : `<div class="empty"><div class="glyph">✎</div><p>Votre carnet est vierge.<br>Touchez + après chaque rencontre.</p></div>`;
+    return;
+  }
+  list.innerHTML = arr.map(c=>{
+    const role=[c.role].filter(Boolean).join('');
+    return `<div class="card" onclick="openDetail('${c.id}')">
+      <div class="row1">
+        <span class="nm">${esc(c.name||'Sans nom')}</span>
+        <span class="when">${relDate(lastTouch(c))}</span>
+      </div>
+      ${role?`<div class="role">${esc(role)}</div>`:''}
+      ${c.summary?`<div class="tagline">${esc(c.summary)}</div>`:''}
+    </div>`;
+  }).join('');
+}
+
+/* ===================== DETAIL RENDER ===================== */
+function openDetail(id){
+  currentId=id;
+  const c=contacts.find(x=>x.id===id);
+  if(!c) return;
+  const notes=[...(c.notes||[])].sort((a,b)=>b.ts-a.ts);
+  const metaBits=[];
+  if(c.met) metaBits.push(`Rencontré·e : ${esc(c.met)}`);
+  if(c.contact){
+    const isUrl=/^https?:\/\//i.test(c.contact)||/linkedin\.com/i.test(c.contact);
+    metaBits.push(isUrl?`<a href="${esc(c.contact.startsWith('http')?c.contact:'https://'+c.contact)}" target="_blank" rel="noopener">${esc(c.contact)}</a>`:esc(c.contact));
+  }
+  $('detailBody').innerHTML = `
+    <div class="hero">
+      <div class="nm">${esc(c.name||'Sans nom')}</div>
+      ${c.role?`<div class="role">${esc(c.role)}</div>`:''}
+      ${c.edu?`<div class="meta">${esc(c.edu)}</div>`:''}
+      ${metaBits.length?`<div class="meta">${metaBits.join(' · ')}</div>`:''}
+    </div>
+    ${c.summary?`<div class="sec"><h3>À retenir</h3><div class="field-line">${esc(c.summary)}</div></div>`:''}
+    <div class="sec">
+      <h3>Notes d'échanges · ${notes.length}</h3>
+      <button class="btn ghost" style="margin-bottom:14px;" onclick="openNote()">+ Nouvelle note</button>
+      ${notes.length? notes.map(n=>`
+        <div class="note">
+          <button class="nt-del" onclick="delNote('${n.id}')">×</button>
+          <div class="nt-date">${fullDate(n.ts)} · ${relDate(n.ts)}</div>
+          <div class="nt-body">${esc(n.body)}</div>
+        </div>`).join('')
+        : `<div class="field-line" style="color:var(--ink-faint);font-style:italic;">Pas encore de note. Ajoutez le récit de votre dernier échange.</div>`}
+    </div>`;
+  go('detail');
+}
+
+/* ===================== NOTES ===================== */
+function openNote(){
+  const c=contacts.find(x=>x.id===currentId);
+  $('noteFor').textContent='Pour '+(c?.name||'');
+  $('note-body').value='';
+  go('note');
+}
+$('noteSave').onclick=async()=>{
+  const body=$('note-body').value.trim();
+  if(!body) return;
+  const c=contacts.find(x=>x.id===currentId);
+  c.notes=c.notes||[];
+  c.notes.push({id:uid(),ts:Date.now(),body});
+  await dbPut(c);
+  openDetail(currentId);
+  renderList($('search').value);
+};
+async function delNote(nid){
+  if(!confirm('Supprimer cette note ?')) return;
+  const c=contacts.find(x=>x.id===currentId);
+  c.notes=(c.notes||[]).filter(n=>n.id!==nid);
+  await dbPut(c);
+  openDetail(currentId);
+}
+
+/* ===================== FORM (add / edit) ===================== */
+function fillForm(c){
+  $('f-name').value=c?.name||'';
+  $('f-role').value=c?.role||'';
+  $('f-edu').value=c?.edu||'';
+  $('f-contact').value=c?.contact||'';
+  $('f-met').value=c?.met||'';
+  $('f-summary').value=c?.summary||'';
+  $('ai-input').value='';
+  $('ai-status').textContent='';
+  $('ai-status').className='ai-status';
+}
+function openNew(){
+  editingId=null;
+  $('formTitle').textContent='Nouveau contact';
+  $('formDelete').style.display='none';
+  fillForm(null);
+  go('form');
+  setTimeout(()=>$('f-name').focus(),200);
+}
+$('editBtn').onclick=()=>{
+  const c=contacts.find(x=>x.id===currentId);
+  editingId=currentId;
+  $('formTitle').textContent='Modifier';
+  $('formDelete').style.display='block';
+  fillForm(c);
+  go('form');
+};
+$('formCancel').onclick=()=> editingId? openDetail(editingId) : go('list');
+$('formSave').onclick=async()=>{
+  const name=$('f-name').value.trim();
+  if(!name){ $('f-name').focus(); $('f-name').style.borderColor='var(--danger)'; return; }
+  let c;
+  if(editingId){ c=contacts.find(x=>x.id===editingId); }
+  else { c={id:uid(),created:Date.now(),notes:[]}; contacts.push(c); }
+  c.name=name;
+  c.role=$('f-role').value.trim();
+  c.edu=$('f-edu').value.trim();
+  c.contact=$('f-contact').value.trim();
+  c.met=$('f-met').value.trim();
+  c.summary=$('f-summary').value.trim();
+  await dbPut(c);
+  renderList($('search').value);
+  openDetail(c.id);
+};
+$('formDelete').onclick=async()=>{
+  if(!confirm('Supprimer ce contact et toutes ses notes ?')) return;
+  await dbDel(editingId);
+  contacts=contacts.filter(x=>x.id!==editingId);
+  renderList($('search').value);
+  go('list');
+};
+
+/* ===================== AI ENRICH ===================== */
+function setEnrichMode(m){
+  enrichMode=m;
+  $('seg-paste').classList.toggle('on',m==='paste');
+  $('seg-clean').classList.toggle('on',m==='clean');
+  $('ai-input').style.display = (m==='paste')?'block':'none';
+}
+function getApiKey(){
+  let k=localStorage.getItem('anthropic_key');
+  if(!k){
+    k=prompt("Pour utiliser l'assistant, collez votre clé API Anthropic (commence par sk-ant…). Elle reste stockée uniquement sur cet appareil.");
+    if(k){ k=k.trim(); localStorage.setItem('anthropic_key',k); }
+  }
+  return k;
+}
+$('ai-run').onclick=async()=>{
+  const status=$('ai-status');
+  const key=getApiKey();
+  if(!key){ status.className='ai-status err'; status.textContent="Aucune clé fournie — assistant non lancé."; return; }
+
+  let payload;
+  if(enrichMode==='paste'){
+    const raw=$('ai-input').value.trim();
+    if(!raw){ status.className='ai-status err'; status.textContent='Collez d\'abord un texte de profil.'; return; }
+    payload=`Voici le texte brut d'un profil professionnel. Extrais les informations.\n\n"""${raw}"""`;
+  } else {
+    payload=`Voici des informations saisies à la main, à nettoyer et reformuler proprement (sans inventer) :\n`+
+      `Nom: ${$('f-name').value}\nPoste: ${$('f-role').value}\nÉtudes: ${$('f-edu').value}\n`+
+      `Coordonnées: ${$('f-contact').value}\nRencontre: ${$('f-met').value}\nÀ retenir: ${$('f-summary').value}`;
+  }
+
+  status.className='ai-status'; status.innerHTML='<span class="spinner"></span>L\'assistant travaille…';
+  $('ai-run').disabled=true;
+
+  const sys=`Tu structures une fiche contact pour un CRM personnel. Réponds UNIQUEMENT par un objet JSON, sans texte ni balises autour, avec ces clés exactes: name, role, edu, contact, met, summary. `+
+    `"role" = poste actuel + entreprise. "edu" = formation/parcours. "contact" = email/tel/LinkedIn si présent. `+
+    `"met" = contexte de rencontre si présent. "summary" = une phrase mémorable qui résume la personne. `+
+    `N'invente jamais d'information absente. Laisse une chaîne vide si inconnu. Conserve les valeurs déjà correctes.`;
+
+  try{
+    const r=await fetch('https://api.anthropic.com/v1/messages',{
+      method:'POST',
+      headers:{
+        'content-type':'application/json',
+        'x-api-key':key,
+        'anthropic-version':'2023-06-01',
+        'anthropic-dangerous-direct-browser-access':'true'
+      },
+      body:JSON.stringify({
+        model:'claude-sonnet-4-6',
+        max_tokens:700,
+        system:sys,
+        messages:[{role:'user',content:payload}]
+      })
+    });
+    if(!r.ok){
+      const t=await r.text();
+      if(r.status===401){ localStorage.removeItem('anthropic_key'); throw new Error('Clé refusée. Relancez pour la ressaisir.'); }
+      throw new Error('Erreur '+r.status+' — '+t.slice(0,120));
+    }
+    const data=await r.json();
+    let txt=(data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('').trim();
+    txt=txt.replace(/```json|```/g,'').trim();
+    const obj=JSON.parse(txt);
+    if(obj.name) $('f-name').value=obj.name;
+    if(obj.role) $('f-role').value=obj.role;
+    if(obj.edu) $('f-edu').value=obj.edu;
+    if(obj.contact) $('f-contact').value=obj.contact;
+    if(obj.met) $('f-met').value=obj.met;
+    if(obj.summary) $('f-summary').value=obj.summary;
+    status.className='ai-status ok'; status.textContent='✓ Champs remplis. Vérifiez puis enregistrez.';
+  }catch(e){
+    status.className='ai-status err'; status.textContent='⚠ '+e.message;
+  }finally{
+    $('ai-run').disabled=false;
+  }
+};
+
+/* ===================== SEARCH ===================== */
+$('search').oninput=e=>renderList(e.target.value);
+$('f-name').oninput=()=>{$('f-name').style.borderColor='';};
+
+/* ===================== BOOT ===================== */
+(async function(){
+  await openDB();
+  contacts=await dbAll();
+  setEnrichMode('paste');
+  renderList();
+})();
+</script>
+</body>
+</html>
