@@ -267,11 +267,6 @@
     </div>
   </section>
 
-  <section id="screen-chat-confirm" class="screen">
-    <div class="backbar"><button class="back" id="chatConfirmCancel">‹ Annuler</button><div class="spacer"></div><span class="count">Propositions</span></div>
-    <div class="formgrid" id="chatConfirmBody"></div>
-  </section>
-
   <button class="fab" id="fab" onclick="openNew()">+</button>
 </div>
 
@@ -677,13 +672,13 @@ function chatSystem(){
     const c=contacts.find(x=>x.id===chatPersonId);
     return `Tu es l'assistant d'un carnet relationnel personnel. L'utilisateur s'apprête à revoir une personne. `+
       `Aide-le à se préparer : rappelle qui elle est, l'historique de leurs échanges, ce qui compte pour elle, et les suites à donner. `+
-      `Si tu juges utile de créer un rappel ou de modifier la fiche, propose-le explicitement avant d'agir. `+
+      `Si tu juges utile de créer un rappel, propose-le explicitement. Utilise cette balise dans ta réponse: [ACTION:reminder:texte:jours] où jours est optionnel. `+
       `Sois concret, bref, et n'invente jamais d'information absente de la fiche. Réponds en français.\n\n`+
       `FICHE COMPLÈTE :\n${contactContext(c)}`;
   }
   return `Tu es l'assistant d'un carnet relationnel personnel. Tu as accès à la liste des contacts ci-dessous et tu réponds aux questions de l'utilisateur `+
     `(qui relancer, ce qu'il sait sur une personne, qui il a rencontré quelque part…). Si une question porte sur une personne précise, appuie-toi sur sa fiche. `+
-    `Si tu juges utile de créer un contact, un rappel, ou de modifier une fiche, propose-le explicitement et l'utilisateur décidera. `+
+    `Si tu juges utile de créer un contact, utilise: [ACTION:contact:nom:rôle:études]. Pour un rappel: [ACTION:reminder:texte:jours] `+
     `N'invente jamais. Réponds en français, de façon concrète et brève.\n\nCONTACTS :\n${carnetOverview()}\n\n`+
     `FICHES DÉTAILLÉES :\n${contacts.map(contactContext).join('\n\n')}`;
 }
@@ -741,111 +736,131 @@ async function chatCall(userMsg){
   if(!r.ok){const t=await r.text(); if(r.status===401){localStorage.removeItem('anthropic_key'); throw new Error('Clé refusée. Relancez pour la ressaisir.');} throw new Error('Erreur '+r.status+' — '+t.slice(0,140));}
   const data=await r.json(); return (data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('').trim();
 }
-let chatPendingActions=null; // stocke les propositions du chat en attente de confirmation
+let chatPendingAction=null; // stocke l'action en attente de confirmation
 async function sendChat(){
   if(chatBusy)return; const t=$('chatText').value.trim(); if(!t)return;
   $('chatText').value=''; $('chatText').style.height='auto';
   chatHistory.push({role:'user',content:t}); chatBusy=true; renderChat();
   try{ const ans=await chatCall(t);
-    // Essayer de détecter un JSON avec des propositions d'actions
-    let propose=null;
-    try{ const lines=ans.split('\n'); for(const line of lines){
-      const m=line.match(/```json\s*([\s\S]*?)\s*```/)||line.match(/^(\{[\s\S]*\})$/);
-      if(m){const obj=JSON.parse(m[1]); if(obj.actions&&Array.isArray(obj.actions)){propose=obj; break;}}
-    }}catch(e){}
-    
-    if(propose&&propose.actions&&propose.actions.length){
-      // Afficher un écran de confirmation pour les propositions
-      chatPendingActions=propose;
-      renderChatConfirm();
+    // Détecter les balises [ACTION:...] dans la réponse
+    const actionMatch=ans.match(/\[ACTION:([^\]]+)\]/);
+    if(actionMatch){
+      const parts=actionMatch[1].split(':');
+      const actionType=parts[0]; // reminder, contact, modify
+      chatPendingAction={
+        type:actionType,
+        parts:parts.slice(1),
+        fullText:ans.replace(actionMatch[0],'').trim()
+      };
+      // Afficher la réponse + boutons de confirmation
+      chatHistory.push({role:'assistant',content:chatPendingAction.fullText});
+      renderChat();
+      renderActionConfirm();
     } else {
-      // Pas de propositions, afficher la réponse directement
+      // Pas d'action proposée, réponse normale
       chatHistory.push({role:'assistant',content:ans});
+      renderChat();
     }
   }
-  catch(e){ chatHistory.push({role:'assistant',content:'⚠ '+e.message}); }
-  chatBusy=false; renderChat();
+  catch(e){ chatHistory.push({role:'assistant',content:'⚠ '+e.message}); chatBusy=false; renderChat(); }
 }
 $('chatSend').onclick=sendChat;
 $('chatText').addEventListener('input',function(){this.style.height='auto'; this.style.height=Math.min(this.scrollHeight,120)+'px';});
 $('chatText').addEventListener('keydown',function(e){ if(e.key==='Enter'&&!e.shiftKey){e.preventDefault(); sendChat();} });
 
-function renderChatConfirm(){
-  const propose=chatPendingActions; if(!propose)return;
-  let html='<p class="keynote" style="text-align:left;padding:4px 0 8px;">L\'assistant a une suggestion :</p>';
-  (propose.actions||[]).forEach((act,i)=>{
-    if(act.type==='create_reminder'){
-      const due=act.data.dueInDays?` · dans ${act.data.dueInDays} j`:'';
-      html+=`<div class="rev-item"><div class="check on" data-idx="${i}" onclick="tglChatAction(${i})">✓</div>
-        <div class="body"><div class="lbl">Créer un rappel</div><div class="new">${esc(act.data.text)}</div><div class="sub">échéance${due||' : sans date'}</div></div></div>`;
-    }
-    else if(act.type==='modify_contact'){
-      const c=contacts.find(x=>x.id===act.data.contactId);
-      html+=`<div class="rev-item"><div class="check on" data-idx="${i}" onclick="tglChatAction(${i})">✓</div>
-        <div class="body"><div class="lbl">Modifier ${c?c.name:'contact'}</div>`;
-      Object.entries(act.data.updates||{}).forEach(([k,v])=>{
-        const labels={role:'Poste',edu:'Études',contact:'Coordonnées',met:'Rencontre'};
-        html+=`<div class="new">${labels[k]||k}: ${esc(v)}</div>`;
-      });
-      html+=`</div></div>`;
-    }
-    else if(act.type==='create_contact'){
-      html+=`<div class="rev-item"><div class="check on" data-idx="${i}" onclick="tglChatAction(${i})">✓</div>
-        <div class="body"><div class="lbl">Créer un nouveau contact</div><div class="new">${esc(act.data.name)}</div>
-        ${act.data.role?`<div class="sub">${esc(act.data.role)}</div>`:''}</div></div>`;
-    }
-  });
-  if(propose.response){html+=`<div style="margin-top:16px;padding:12px 14px;background:var(--paper-deep);border-radius:11px;"><b>Pensée de l'assistant :</b><br>${formatAI(propose.response)}</div>`;}
-  html+=`<div class="btn-row" style="margin-top:20px;"><button class="btn ghost" onclick="chatPendingActions=null; go('chat');">Refuser</button><button class="btn primary" id="chatConfirmYes">Appliquer</button></div>`;
-  $('chatConfirmBody').innerHTML=html;
-  $('chatConfirmYes').onclick=applyChatActions;
-  go('chat-confirm');
-}
-
-function tglChatAction(idx){
-  const el=document.querySelector(`.check[data-idx="${idx}"]`);
-  el.classList.toggle('on');
-}
-
-async function applyChatActions(){
-  if(!chatPendingActions)return;
-  const propose=chatPendingActions;
-  const chks=document.querySelectorAll('.check[data-idx]');
-  const toApply=Array.from(chks).filter(c=>c.classList.contains('on')).map(c=>parseInt(c.dataset.idx));
+function renderActionConfirm(){
+  if(!chatPendingAction)return;
+  const act=chatPendingAction;
+  let desc=''; let btnText='Créer';
   
-  for(const idx of toApply){
-    const act=propose.actions[idx];
-    if(act.type==='create_reminder'){
-      const targetId=act.data.contactId || chatPersonId;
-      const c=contacts.find(x=>x.id===targetId);
-      if(c){
-        c.reminders=c.reminders||[];
-        const dueDate=act.data.dueInDays?new Date(Date.now()+act.data.dueInDays*86400000).getTime():null;
-        c.reminders.push({id:uid(),text:act.data.text,due:dueDate,done:false});
-        await save(c);
+  if(act.type==='reminder'){
+    // Format: reminder:texte:jours
+    const text=act.parts[0]||''; const days=parseInt(act.parts[1])||null;
+    desc=`Rappel: <b>${esc(text)}</b>${days!==null?` (dans ${days} j)':''}`;
+  }
+  else if(act.type==='contact'){
+    // Format: contact:nom:rôle:études
+    const name=act.parts[0]||''; const role=act.parts[1]||''; const edu=act.parts[2]||'';
+    desc=`Nouveau contact: <b>${esc(name)}</b>${role?` · ${esc(role)}`:''}${edu?`<br>Études: ${esc(edu)}`:''}`;
+    btnText='Créer le contact';
+  }
+  else if(act.type==='modify'){
+    // Format: modify:contactId:champ:valeur
+    const cid=act.parts[0]||''; const field=act.parts[1]||''; const val=act.parts.slice(2).join(':');
+    const c=contacts.find(x=>x.id===cid);
+    desc=`Modifier <b>${c?c.name:'un contact'}</b><br>${field}: ${esc(val)}`;
+    btnText='Modifier';
+  }
+  
+  const html=`<div style="background:var(--paper-deep);border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-bottom:12px;">
+    <div style="font-size:13px;color:var(--ink-faint);margin-bottom:8px;">✓ Proposition :</div>
+    <div style="font-size:15px;margin-bottom:12px;">${desc}</div>
+    <div style="display:flex;gap:8px;">
+      <button class="btn ghost" style="flex:1;margin:0;padding:10px;" onclick="chatPendingAction=null; reRenderChat()">Ignorer</button>
+      <button class="btn primary" style="flex:1;margin:0;padding:10px;" id="actionConfirmBtn">${btnText}</button>
+    </div>
+  </div>`;
+  
+  // Injecter avant le champ de saisie
+  const chatInput=$('chatText').parentElement;
+  let existing=chatInput.querySelector('#actionPrompt');
+  if(!existing){
+    existing=document.createElement('div'); existing.id='actionPrompt';
+    chatInput.parentElement.insertBefore(existing,chatInput);
+  }
+  existing.innerHTML=html;
+  $('actionConfirmBtn').onclick=confirmAction;
+}
+
+function reRenderChat(){ renderChat(); }
+
+async function confirmAction(){
+  if(!chatPendingAction)return;
+  const act=chatPendingAction;
+  const c=contacts.find(x=>x.id===chatPersonId);
+  if(!c&&act.type==='reminder') return; // pas de contexte de contact
+  
+  try{
+    if(act.type==='reminder'){
+      const text=act.parts[0]||'';
+      const days=parseInt(act.parts[1])||null;
+      const targetId=act.parts[2]||chatPersonId;
+      const target=contacts.find(x=>x.id===targetId);
+      if(target){
+        target.reminders=target.reminders||[];
+        const dueDate=days!==null?new Date(Date.now()+days*86400000).getTime():null;
+        target.reminders.push({id:uid(),text,due:dueDate,done:false});
+        await save(target);
       }
     }
-    else if(act.type==='modify_contact'){
-      const c=contacts.find(x=>x.id===act.data.contactId);
-      if(c){
-        Object.assign(c,act.data.updates||{});
-        await save(c);
-      }
-    }
-    else if(act.type==='create_contact'){
-      const nc={id:uid(),created:Date.now(),name:act.data.name,role:act.data.role||'',edu:act.data.edu||'',contact:act.data.contact||'',
-        met:act.data.met||'',summary:act.data.summary||'',notes:[],relations:[],reminders:[]};
+    else if(act.type==='contact'){
+      const name=act.parts[0]||'';
+      const role=act.parts[1]||'';
+      const edu=act.parts[2]||'';
+      const nc={id:uid(),created:Date.now(),name,role,edu,contact:'',met:'',summary:'',notes:[],relations:[],reminders:[]};
       contacts.push(nc);
       await save(nc);
     }
+    else if(act.type==='modify'){
+      const cid=act.parts[0]||'';
+      const field=act.parts[1]||'';
+      const val=act.parts.slice(2).join(':');
+      const target=contacts.find(x=>x.id===cid);
+      if(target&&field){target[field]=val; await save(target);}
+    }
+    
+    // Feedback
+    chatHistory.push({role:'assistant',content:'✓ Action exécutée.'});
+    chatPendingAction=null;
+    renderChat(); renderList($('search').value);
+    if(chatPersonId)openDetail(chatPersonId);
+    const prompt=document.getElementById('actionPrompt');
+    if(prompt)prompt.innerHTML='';
+  }catch(e){
+    chatHistory.push({role:'assistant',content:'⚠ Erreur : '+e.message});
+    chatPendingAction=null;
+    renderChat();
   }
-  
-  // Ajouter la réponse au chat
-  chatPendingActions=null;
-  chatHistory.push({role:'assistant',content:propose.response||'✓ Modifications appliquées.'});
-  renderChat(); renderList($('search').value);
-  if(chatPersonId) openDetail(chatPersonId);
-  go('chat');
 }
 
 
