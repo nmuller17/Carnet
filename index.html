@@ -242,7 +242,7 @@
   </section>
 
   <section id="screen-reminders" class="screen">
-    <div class="backbar"><button class="back" onclick="go('list')">‹ Carnet</button><div class="spacer"></div><span class="count">Rappels</span></div>
+    <div class="backbar"><button class="back" onclick="go('list')">‹ Carnet</button><div class="spacer"></div><button class="iconbtn" onclick="openReminderForm(true)">+ Nouveau rappel</button></div>
     <div class="rem-group" id="remindersBody"></div>
   </section>
 
@@ -259,12 +259,21 @@
   <section id="screen-reminder-form" class="screen">
     <div class="backbar"><button class="back" id="remFormCancel">‹ Retour</button><div class="spacer"></div><span class="count">Nouveau rappel</span></div>
     <div class="formgrid">
+      <div id="rem-contact-wrap" style="display:none;">
+        <label class="fl">Pour qui ?</label>
+        <select class="f" id="rem-contact"></select>
+      </div>
       <label class="fl">Ce qu'il faut faire</label>
       <input class="f" id="rem-text" placeholder="Ex. Relancer pour la réunion, Envoyer l'article…" autocomplete="off">
       <label class="fl">Échéance (optionnel)</label>
       <input class="f" id="rem-date" type="date" placeholder="">
       <button class="btn primary" id="remSaveBtn" style="margin-top:20px;">Ajouter ce rappel</button>
     </div>
+  </section>
+
+  <section id="screen-chat-confirm" class="screen">
+    <div class="backbar"><button class="back" id="chatConfirmCancel">‹ Annuler</button><div class="spacer"></div><span class="count">Propositions</span></div>
+    <div class="formgrid" id="chatConfirmBody"></div>
   </section>
 
   <button class="fab" id="fab" onclick="openNew()">+</button>
@@ -414,9 +423,7 @@ function openDetail(id){
     ${r.due?`<div class="rdate">échéance : ${fullDate(new Date(r.due).getTime())}</div>`:''}
     <div class="ract"><span class="mini ${r.done?'done':''}" onclick="toggleRem('${c.id}','${r.id}')">${r.done?'✓ fait':'marquer fait'}</span>
     <a class="mini" onclick="sendToReminders('${c.id}','${r.id}')">＋ Rappel</a>
-    <span class="mini" onclick="delRem('${c.id}','${r.id}')">supprimer</span></div></div>`).join('')+
-    '<button class="btn ghost" style="margin-top:12px;" onclick="openReminderForm()">+ Ajouter un rappel</button></div>';}
-  else remHtml='<div class="sec"><h3>Rappels</h3><button class="btn ghost" onclick="openReminderForm()">+ Créer le premier rappel</button></div>';
+    <span class="mini" onclick="delRem('${c.id}','${r.id}')">supprimer</span></div></div>`).join('')+'</div>';}
 
   $('detailBody').innerHTML=`
     <div class="hero"><div class="nm">${esc(c.name||'Sans nom')}</div>
@@ -441,15 +448,35 @@ function openDetail(id){
 }
 
 function openNote(){const c=contacts.find(x=>x.id===currentId); $('noteFor').textContent='Pour '+(c?.name||''); $('note-body').value=''; go('note');}
-function openReminderForm(){const c=contacts.find(x=>x.id===currentId); if(!c)return; $('rem-text').value=''; $('rem-date').value=''; 
-  $('remFormCancel').onclick=()=>openDetail(c.id); go('reminder-form');
-  setTimeout(()=>$('rem-text').focus(),200);}
+function openReminderForm(fromReminders){
+  // fromReminders=true → ouvert depuis l'onglet Rappels (choisir le contact); sinon depuis une fiche
+  $('rem-text').value=''; $('rem-date').value=''; $('rem-text').style.borderColor='';
+  const wrap=$('rem-contact-wrap'); const sel=$('rem-contact');
+  if(fromReminders){
+    if(!contacts.length){alert('Ajoutez d\'abord un contact.'); return;}
+    wrap.style.display='block';
+    sel.innerHTML=[...contacts].sort((a,b)=>(a.name||'').localeCompare(b.name||''))
+      .map(c=>`<option value="${c.id}">${esc(c.name||'Sans nom')}</option>`).join('');
+    if(currentId) sel.value=currentId;
+    $('remFormCancel').onclick=()=>openReminders();
+  } else {
+    const c=contacts.find(x=>x.id===currentId); if(!c)return;
+    wrap.style.display='none';
+    $('remFormCancel').onclick=()=>openDetail(c.id);
+  }
+  remFormMode = fromReminders ? 'reminders' : 'detail';
+  go('reminder-form'); setTimeout(()=>$('rem-text').focus(),200);
+}
+let remFormMode='detail';
 $('remSaveBtn').onclick=async()=>{const text=$('rem-text').value.trim(); const dateStr=$('rem-date').value;
   if(!text){$('rem-text').focus(); $('rem-text').style.borderColor='var(--danger)'; return;}
-  const c=contacts.find(x=>x.id===currentId); c.reminders=c.reminders||[];
+  const cid = (remFormMode==='reminders') ? $('rem-contact').value : currentId;
+  const c=contacts.find(x=>x.id===cid); if(!c)return;
+  c.reminders=c.reminders||[];
   const due=dateStr?new Date(dateStr).getTime():null;
   c.reminders.push({id:uid(),text,due,done:false});
-  await save(c); openDetail(currentId); renderList($('search').value);}
+  await save(c); renderList($('search').value);
+  if(remFormMode==='reminders') openReminders(); else openDetail(cid);}
 $('rem-text').oninput=()=>{$('rem-text').style.borderColor='';};
 $('noteSave').onclick=async()=>{const body=$('note-body').value.trim(); if(!body)return;
   const c=contacts.find(x=>x.id===currentId); c.notes=c.notes||[]; c.notes.push({id:uid(),ts:Date.now(),body,analyzed:false});
@@ -668,19 +695,31 @@ function carnetOverview(){
   return contacts.map(c=>`- ${c.name} — ${c.role||'poste ?'} — vu ${relDate(lastTouch(c))}${(c.reminders||[]).some(r=>!r.done)?' — a des rappels en cours':''}`).join('\n');
 }
 function chatSystem(){
+  const actionProtocol = `\n\n--- ACTIONS ---\n`+
+    `L'utilisateur peut te demander d'agir sur le carnet : créer un contact, modifier une fiche, créer un rappel. `+
+    `Quand sa demande implique une de ces actions, tu DOIS répondre EXCLUSIVEMENT par un bloc JSON (rien avant, rien après), de cette forme exacte :\n`+
+    '```json\n'+
+    `{"response":"phrase courte décrivant ce que tu proposes","actions":[ ... ]}\n`+
+    '```\n'+
+    `Types d'actions possibles :\n`+
+    `- créer un rappel : {"type":"create_reminder","data":{"contactId":"<id du contact concerné>","text":"<libellé impératif>","dueInDays":<entier ou null>}}\n`+
+    `- modifier une fiche : {"type":"modify_contact","data":{"contactId":"<id>","updates":{"role":"…","edu":"…","contact":"…","met":"…","summary":"…"}}} (n'inclus que les champs à changer)\n`+
+    `- créer un contact : {"type":"create_contact","data":{"name":"…","role":"…","edu":"…","contact":"…","met":"…","summary":"…"}}\n`+
+    `Utilise les identifiants (id) exacts fournis dans la liste des contacts. Ne propose que des actions explicitement demandées ou clairement utiles. `+
+    `Si la demande ne nécessite AUCUNE action (simple question), réponds normalement en texte, SANS JSON.`;
+
   if(chatPersonId){
     const c=contacts.find(x=>x.id===chatPersonId);
     return `Tu es l'assistant d'un carnet relationnel personnel. L'utilisateur s'apprête à revoir une personne. `+
       `Aide-le à se préparer : rappelle qui elle est, l'historique de leurs échanges, ce qui compte pour elle, et les suites à donner. `+
-      `Si tu juges utile de créer un rappel, propose-le explicitement. Utilise cette balise dans ta réponse: [ACTION:reminder:texte:jours] où jours est optionnel. `+
       `Sois concret, bref, et n'invente jamais d'information absente de la fiche. Réponds en français.\n\n`+
-      `FICHE COMPLÈTE :\n${contactContext(c)}`;
+      `FICHE COMPLÈTE (id du contact : ${c.id}) :\n${contactContext(c)}`+actionProtocol;
   }
   return `Tu es l'assistant d'un carnet relationnel personnel. Tu as accès à la liste des contacts ci-dessous et tu réponds aux questions de l'utilisateur `+
     `(qui relancer, ce qu'il sait sur une personne, qui il a rencontré quelque part…). Si une question porte sur une personne précise, appuie-toi sur sa fiche. `+
-    `Si tu juges utile de créer un contact, utilise: [ACTION:contact:nom:rôle:études]. Pour un rappel: [ACTION:reminder:texte:jours] `+
-    `N'invente jamais. Réponds en français, de façon concrète et brève.\n\nCONTACTS :\n${carnetOverview()}\n\n`+
-    `FICHES DÉTAILLÉES :\n${contacts.map(contactContext).join('\n\n')}`;
+    `N'invente jamais. Réponds en français, de façon concrète et brève.\n\nCONTACTS (avec leur id) :\n`+
+    contacts.map(c=>`- [${c.id}] ${c.name} — ${c.role||'poste ?'}`).join('\n')+`\n\n`+
+    `FICHES DÉTAILLÉES :\n${contacts.map(c=>`(id: ${c.id})\n`+contactContext(c)).join('\n\n')}`+actionProtocol;
 }
 function renderChat(){
   const s=$('chatScroll');
@@ -699,7 +738,7 @@ function setSuggestions(){
   const box=$('chatSuggest');
   let chips=[];
   if(chatPersonId) chips=['Quels sont les points de suivi ?','Résume notre dernier échange','Sur quoi rebondir ?'];
-  else chips=['Qui dois-je relancer ?','Qui ai-je vu récemment ?'];
+  else chips=['Qui dois-je relancer ?','Qui ai-je vu récemment ?','Crée un rappel pour…'];
   box.innerHTML=chips.map(c=>`<button onclick="quickAsk(${JSON.stringify(c).replace(/"/g,'&quot;')})">${esc(c)}</button>`).join('');
 }
 function quickAsk(t){ $('chatText').value=t; sendChat(); }
@@ -713,7 +752,7 @@ function openChat(personId){
     autoBrief();
   } else {
     $('chatTitle').textContent='Assistant — tout le carnet';
-    chatHistory.push({role:'system_note',content:contacts.length?`Posez une question sur n'importe lequel de vos ${contacts.length} contacts.`:'Votre carnet est vide.'});
+    chatHistory.push({role:'system_note',content:contacts.length?`Posez une question, ou demandez une action (créer un contact, modifier une fiche, ajouter un rappel). Tout changement vous sera soumis avant d'être appliqué.`:'Votre carnet est vide.'});
     setSuggestions(); renderChat(); go('chat');
   }
 }
@@ -721,7 +760,8 @@ async function autoBrief(){
   chatBusy=true; renderChat();
   try{
     const ans=await chatCall('Fais-moi un briefing de préparation avant de revoir cette personne : qui elle est, l\'essentiel de notre historique, et les points de suivi à ne pas oublier.');
-    chatHistory.push({role:'assistant',content:ans});
+    const p=parseActions(ans);
+    chatHistory.push({role:'assistant',content:(p&&p.response)?p.response:ans});
   }catch(e){ chatHistory.push({role:'assistant',content:'⚠ '+e.message}); }
   chatBusy=false; renderChat();
 }
@@ -736,132 +776,116 @@ async function chatCall(userMsg){
   if(!r.ok){const t=await r.text(); if(r.status===401){localStorage.removeItem('anthropic_key'); throw new Error('Clé refusée. Relancez pour la ressaisir.');} throw new Error('Erreur '+r.status+' — '+t.slice(0,140));}
   const data=await r.json(); return (data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('').trim();
 }
-let chatPendingAction=null; // stocke l'action en attente de confirmation
+let chatPendingActions=null; // stocke les propositions du chat en attente de confirmation
 async function sendChat(){
   if(chatBusy)return; const t=$('chatText').value.trim(); if(!t)return;
   $('chatText').value=''; $('chatText').style.height='auto';
   chatHistory.push({role:'user',content:t}); chatBusy=true; renderChat();
   try{ const ans=await chatCall(t);
-    // Détecter les balises [ACTION:...] dans la réponse
-    const actionMatch=ans.match(/\[ACTION:([^\]]+)\]/);
-    if(actionMatch){
-      const parts=actionMatch[1].split(':');
-      const actionType=parts[0]; // reminder, contact, modify
-      chatPendingAction={
-        type:actionType,
-        parts:parts.slice(1),
-        fullText:ans.replace(actionMatch[0],'').trim()
-      };
-      // Afficher la réponse + boutons de confirmation
-      chatHistory.push({role:'assistant',content:chatPendingAction.fullText});
-      renderChat();
-      renderActionConfirm();
+    let propose=parseActions(ans);
+    if(propose&&propose.actions&&propose.actions.length){
+      chatPendingActions=propose;
+      renderChatConfirm();
     } else {
-      // Pas d'action proposée, réponse normale
-      chatHistory.push({role:'assistant',content:ans});
-      renderChat();
+      chatHistory.push({role:'assistant',content:(propose&&propose.response)?propose.response:ans});
     }
   }
-  catch(e){ chatHistory.push({role:'assistant',content:'⚠ '+e.message}); chatBusy=false; renderChat(); }
+  catch(e){ chatHistory.push({role:'assistant',content:'⚠ '+e.message}); }
+  chatBusy=false; renderChat();
+}
+function parseActions(ans){
+  // 1) try fenced ```json ... ``` block
+  let m=ans.match(/```json\s*([\s\S]*?)\s*```/i) || ans.match(/```\s*([\s\S]*?)\s*```/);
+  let candidate = m ? m[1] : null;
+  // 2) otherwise, if the whole thing looks like a JSON object, use it
+  if(!candidate){ const t=ans.trim(); if(t.startsWith('{')&&t.endsWith('}')) candidate=t; }
+  if(!candidate) return null;
+  try{ const obj=JSON.parse(candidate); if(obj&&Array.isArray(obj.actions)) return obj; }catch(e){}
+  return null;
 }
 $('chatSend').onclick=sendChat;
 $('chatText').addEventListener('input',function(){this.style.height='auto'; this.style.height=Math.min(this.scrollHeight,120)+'px';});
 $('chatText').addEventListener('keydown',function(e){ if(e.key==='Enter'&&!e.shiftKey){e.preventDefault(); sendChat();} });
 
-function renderActionConfirm(){
-  if(!chatPendingAction)return;
-  const act=chatPendingAction;
-  let desc=''; let btnText='Créer';
-  
-  if(act.type==='reminder'){
-    // Format: reminder:texte:jours
-    const text=act.parts[0]||''; const days=parseInt(act.parts[1])||null;
-    desc=`Rappel: <b>${esc(text)}</b>${days!==null?` (dans ${days} j)':''}`;
-  }
-  else if(act.type==='contact'){
-    // Format: contact:nom:rôle:études
-    const name=act.parts[0]||''; const role=act.parts[1]||''; const edu=act.parts[2]||'';
-    desc=`Nouveau contact: <b>${esc(name)}</b>${role?` · ${esc(role)}`:''}${edu?`<br>Études: ${esc(edu)}`:''}`;
-    btnText='Créer le contact';
-  }
-  else if(act.type==='modify'){
-    // Format: modify:contactId:champ:valeur
-    const cid=act.parts[0]||''; const field=act.parts[1]||''; const val=act.parts.slice(2).join(':');
-    const c=contacts.find(x=>x.id===cid);
-    desc=`Modifier <b>${c?c.name:'un contact'}</b><br>${field}: ${esc(val)}`;
-    btnText='Modifier';
-  }
-  
-  const html=`<div style="background:var(--paper-deep);border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-bottom:12px;">
-    <div style="font-size:13px;color:var(--ink-faint);margin-bottom:8px;">✓ Proposition :</div>
-    <div style="font-size:15px;margin-bottom:12px;">${desc}</div>
-    <div style="display:flex;gap:8px;">
-      <button class="btn ghost" style="flex:1;margin:0;padding:10px;" onclick="chatPendingAction=null; reRenderChat()">Ignorer</button>
-      <button class="btn primary" style="flex:1;margin:0;padding:10px;" id="actionConfirmBtn">${btnText}</button>
-    </div>
-  </div>`;
-  
-  // Injecter avant le champ de saisie
-  const chatInput=$('chatText').parentElement;
-  let existing=chatInput.querySelector('#actionPrompt');
-  if(!existing){
-    existing=document.createElement('div'); existing.id='actionPrompt';
-    chatInput.parentElement.insertBefore(existing,chatInput);
-  }
-  existing.innerHTML=html;
-  $('actionConfirmBtn').onclick=confirmAction;
+function renderChatConfirm(){
+  const propose=chatPendingActions; if(!propose)return;
+  let html='<p class="keynote" style="text-align:left;padding:4px 0 8px;">L\'assistant a une suggestion :</p>';
+  (propose.actions||[]).forEach((act,i)=>{
+    if(act.type==='create_reminder'){
+      const due=act.data.dueInDays?` · dans ${act.data.dueInDays} j`:'';
+      html+=`<div class="rev-item"><div class="check on" data-idx="${i}" onclick="tglChatAction(${i})">✓</div>
+        <div class="body"><div class="lbl">Créer un rappel</div><div class="new">${esc(act.data.text)}</div><div class="sub">échéance${due||' : sans date'}</div></div></div>`;
+    }
+    else if(act.type==='modify_contact'){
+      const c=contacts.find(x=>x.id===act.data.contactId);
+      html+=`<div class="rev-item"><div class="check on" data-idx="${i}" onclick="tglChatAction(${i})">✓</div>
+        <div class="body"><div class="lbl">Modifier ${c?c.name:'contact'}</div>`;
+      Object.entries(act.data.updates||{}).forEach(([k,v])=>{
+        const labels={role:'Poste',edu:'Études',contact:'Coordonnées',met:'Rencontre'};
+        html+=`<div class="new">${labels[k]||k}: ${esc(v)}</div>`;
+      });
+      html+=`</div></div>`;
+    }
+    else if(act.type==='create_contact'){
+      html+=`<div class="rev-item"><div class="check on" data-idx="${i}" onclick="tglChatAction(${i})">✓</div>
+        <div class="body"><div class="lbl">Créer un nouveau contact</div><div class="new">${esc(act.data.name)}</div>
+        ${act.data.role?`<div class="sub">${esc(act.data.role)}</div>`:''}</div></div>`;
+    }
+  });
+  if(propose.response){html+=`<div style="margin-top:16px;padding:12px 14px;background:var(--paper-deep);border-radius:11px;"><b>Pensée de l'assistant :</b><br>${formatAI(propose.response)}</div>`;}
+  html+=`<div class="btn-row" style="margin-top:20px;"><button class="btn ghost" onclick="chatPendingActions=null; go('chat');">Refuser</button><button class="btn primary" id="chatConfirmYes">Appliquer</button></div>`;
+  $('chatConfirmBody').innerHTML=html;
+  $('chatConfirmYes').onclick=applyChatActions;
+  go('chat-confirm');
 }
 
-function reRenderChat(){ renderChat(); }
+function tglChatAction(idx){
+  const el=document.querySelector(`.check[data-idx="${idx}"]`);
+  el.classList.toggle('on');
+}
 
-async function confirmAction(){
-  if(!chatPendingAction)return;
-  const act=chatPendingAction;
-  const c=contacts.find(x=>x.id===chatPersonId);
-  if(!c&&act.type==='reminder') return; // pas de contexte de contact
+async function applyChatActions(){
+  if(!chatPendingActions)return;
+  const propose=chatPendingActions;
+  const chks=document.querySelectorAll('.check[data-idx]');
+  const toApply=Array.from(chks).filter(c=>c.classList.contains('on')).map(c=>parseInt(c.dataset.idx));
   
-  try{
-    if(act.type==='reminder'){
-      const text=act.parts[0]||'';
-      const days=parseInt(act.parts[1])||null;
-      const targetId=act.parts[2]||chatPersonId;
-      const target=contacts.find(x=>x.id===targetId);
-      if(target){
-        target.reminders=target.reminders||[];
-        const dueDate=days!==null?new Date(Date.now()+days*86400000).getTime():null;
-        target.reminders.push({id:uid(),text,due:dueDate,done:false});
-        await save(target);
+  for(const idx of toApply){
+    const act=propose.actions[idx];
+    if(act.type==='create_reminder'){
+      const targetId=act.data.contactId || chatPersonId;
+      const c=contacts.find(x=>x.id===targetId);
+      if(c){
+        c.reminders=c.reminders||[];
+        const dueDate=act.data.dueInDays?new Date(Date.now()+act.data.dueInDays*86400000).getTime():null;
+        c.reminders.push({id:uid(),text:act.data.text,due:dueDate,done:false});
+        await save(c);
       }
     }
-    else if(act.type==='contact'){
-      const name=act.parts[0]||'';
-      const role=act.parts[1]||'';
-      const edu=act.parts[2]||'';
-      const nc={id:uid(),created:Date.now(),name,role,edu,contact:'',met:'',summary:'',notes:[],relations:[],reminders:[]};
+    else if(act.type==='modify_contact'){
+      const c=contacts.find(x=>x.id===act.data.contactId);
+      if(c){
+        const oldName=c.name||'';
+        Object.assign(c,act.data.updates||{});
+        await save(c);
+        if(act.data.updates&&act.data.updates.name&&act.data.updates.name!==oldName) await reconcileRelations(c,oldName);
+      }
+    }
+    else if(act.type==='create_contact'){
+      const nc={id:uid(),created:Date.now(),name:act.data.name,role:act.data.role||'',edu:act.data.edu||'',contact:act.data.contact||'',
+        met:act.data.met||'',summary:act.data.summary||'',notes:[],relations:[],reminders:[]};
       contacts.push(nc);
       await save(nc);
+      await reconcileRelations(nc,'');
     }
-    else if(act.type==='modify'){
-      const cid=act.parts[0]||'';
-      const field=act.parts[1]||'';
-      const val=act.parts.slice(2).join(':');
-      const target=contacts.find(x=>x.id===cid);
-      if(target&&field){target[field]=val; await save(target);}
-    }
-    
-    // Feedback
-    chatHistory.push({role:'assistant',content:'✓ Action exécutée.'});
-    chatPendingAction=null;
-    renderChat(); renderList($('search').value);
-    if(chatPersonId)openDetail(chatPersonId);
-    const prompt=document.getElementById('actionPrompt');
-    if(prompt)prompt.innerHTML='';
-  }catch(e){
-    chatHistory.push({role:'assistant',content:'⚠ Erreur : '+e.message});
-    chatPendingAction=null;
-    renderChat();
   }
+  
+  chatPendingActions=null;
+  chatHistory.push({role:'assistant',content:propose.response||'✓ Fait.'});
+  renderList($('search').value);
+  renderChat(); go('chat');
 }
+$('chatConfirmCancel').onclick=()=>{ chatPendingActions=null; go('chat'); };
 
 
 function openSettings(){ $('sb-url').value=SB.url; $('sb-key').value=SB.key; $('sb-status').textContent=''; $('sb-status').className='ai-status'; go('settings'); }
