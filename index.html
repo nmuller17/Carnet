@@ -889,7 +889,7 @@ function carnetOverview(){
 }
 function chatSystem(){
   const actionProtocol = `\n\n--- ACTIONS ---\n`+
-    `L'utilisateur peut te demander d'agir sur le carnet : créer un contact, modifier une fiche, créer un rappel. `+
+    `L'utilisateur peut te demander d'agir sur le carnet : créer un contact, modifier une fiche, créer un rappel, créer un événement, modifier un événement, ajouter des personnes à un événement. `+
     `Quand sa demande implique une de ces actions, tu DOIS répondre EXCLUSIVEMENT par un bloc JSON (rien avant, rien après), de cette forme exacte :\n`+
     '```json\n'+
     `{"response":"phrase courte décrivant ce que tu proposes","actions":[ ... ]}\n`+
@@ -898,7 +898,10 @@ function chatSystem(){
     `- créer un rappel : {"type":"create_reminder","data":{"contactId":"<id du contact concerné>","text":"<libellé impératif>","dueInDays":<entier ou null>}}\n`+
     `- modifier une fiche : {"type":"modify_contact","data":{"contactId":"<id>","updates":{"role":"…","edu":"…","contact":"…","met":"…","summary":"…"}}} (n'inclus que les champs à changer)\n`+
     `- créer un contact : {"type":"create_contact","data":{"name":"…","role":"…","edu":"…","contact":"…","met":"…","summary":"…"}}\n`+
-    `Utilise les identifiants (id) exacts fournis dans la liste des contacts. Ne propose que des actions explicitement demandées ou clairement utiles. `+
+    `- créer un événement : {"type":"create_event","data":{"title":"…","date":"YYYY-MM-DD ou \\"\\"","location":"… ou \\"\\"","context":"… ou \\"\\"","participants":["Nom Prénom", …]}} (participants = liste de NOMS, pas d'id ; ceux qui n'existent pas seront créés)\n`+
+    `- modifier un événement : {"type":"modify_event","data":{"eventId":"<id de l'événement>","updates":{"title":"…","date":"YYYY-MM-DD","location":"…","context":"…"}}} (n'inclus que les champs à changer)\n`+
+    `- ajouter des personnes à un événement : {"type":"add_to_event","data":{"eventId":"<id>","participants":["Nom Prénom", …]}} (NOMS ; conserve les participants déjà présents)\n`+
+    `Utilise les identifiants (id) exacts fournis dans les listes ci-dessous (contacts ET événements). Pour les participants d'un événement, donne les NOMS, pas les id. Ne propose que des actions explicitement demandées ou clairement utiles. `+
     `Si la demande ne nécessite AUCUNE action (simple question), réponds normalement en texte, SANS JSON.`;
 
   if(chatPersonId){
@@ -910,9 +913,9 @@ function chatSystem(){
   }
   const people=realContacts();
   const evs=allEvents().slice().sort((a,b)=>(b.date||'').localeCompare(a.date||''));
-  const evBlock=evs.length?`\n\nÉVÉNEMENTS (rencontres, dans le temps) :\n`+evs.map(e=>{
+  const evBlock=evs.length?`\n\nÉVÉNEMENTS (avec leur id) :\n`+evs.map(e=>{
       const names=(e.participantIds||[]).map(pid=>{const p=getContact(pid); return p?p.name:null;}).filter(Boolean);
-      return `- ${e.date?fullDate(new Date(e.date).getTime()):'date ?'} · ${e.title}${e.location?' ('+e.location+')':''} — participants : ${names.join(', ')||'aucun'}${e.context?' — '+e.context:''}`;
+      return `- [${e.id}] ${e.date?fullDate(new Date(e.date).getTime()):'date ?'} · ${e.title}${e.location?' ('+e.location+')':''} — participants : ${names.join(', ')||'aucun'}${e.context?' — '+e.context:''}`;
     }).join('\n'):'';
   return `Tu es l'assistant d'un carnet relationnel personnel. Tu as accès à la liste des contacts ci-dessous et tu réponds aux questions de l'utilisateur `+
     `(qui relancer, ce qu'il sait sur une personne, qui il a rencontré à tel événement…). Si une question porte sur une personne précise, appuie-toi sur sa fiche. `+
@@ -1030,6 +1033,34 @@ function renderChatConfirm(){
         <div class="body"><div class="lbl">Créer un nouveau contact</div><div class="new">${esc(act.data.name)}</div>
         ${act.data.role?`<div class="sub">${esc(act.data.role)}</div>`:''}</div></div>`;
     }
+    else if(act.type==='create_event'){
+      const parts=(act.data.participants||[]);
+      const labelled=parts.map(nm=>{const ex=findByName(nm); return esc(nm)+(ex?'':' <span style="color:var(--accent);font-size:11px;">(nouveau)</span>');});
+      html+=`<div class="rev-item"><div class="check on" data-idx="${i}" onclick="tglChatAction(${i})">✓</div>
+        <div class="body"><div class="lbl">Créer un événement</div><div class="new">${esc(act.data.title||'Sans titre')}</div>
+        <div class="sub">${act.data.date?fullDate(new Date(act.data.date).getTime()):'date à préciser'}${act.data.location?' · '+esc(act.data.location):''}</div>
+        ${parts.length?`<div class="sub">Présents : ${labelled.join(', ')}</div>`:''}
+        ${act.data.context?`<div class="sub">${esc(act.data.context)}</div>`:''}</div></div>`;
+    }
+    else if(act.type==='modify_event'){
+      const e=getEvent(act.data.eventId);
+      html+=`<div class="rev-item"><div class="check on" data-idx="${i}" onclick="tglChatAction(${i})">✓</div>
+        <div class="body"><div class="lbl">Modifier l'événement ${e?esc(e.title):''}</div>`;
+      Object.entries(act.data.updates||{}).forEach(([k,v])=>{
+        const labels={title:'Titre',date:'Date',location:'Lieu',context:'Contexte'};
+        const disp=(k==='date'&&v)?fullDate(new Date(v).getTime()):v;
+        html+=`<div class="new">${labels[k]||k}: ${esc(disp)}</div>`;
+      });
+      html+=`</div></div>`;
+    }
+    else if(act.type==='add_to_event'){
+      const e=getEvent(act.data.eventId);
+      const parts=(act.data.participants||[]);
+      const labelled=parts.map(nm=>{const ex=findByName(nm); return esc(nm)+(ex?'':' <span style="color:var(--accent);font-size:11px;">(nouveau)</span>');});
+      html+=`<div class="rev-item"><div class="check on" data-idx="${i}" onclick="tglChatAction(${i})">✓</div>
+        <div class="body"><div class="lbl">Ajouter à l'événement ${e?esc(e.title):''}</div>
+        <div class="new">${labelled.join(', ')||'(personne)'}</div></div></div>`;
+    }
   });
   if(propose.response){html+=`<div style="margin-top:16px;padding:12px 14px;background:var(--paper-deep);border-radius:11px;"><b>Pensée de l'assistant :</b><br>${formatAI(propose.response)}</div>`;}
   html+=`<div class="btn-row" style="margin-top:20px;"><button class="btn ghost" onclick="chatPendingActions=null; go('chat');">Refuser</button><button class="btn primary" id="chatConfirmYes">Appliquer</button></div>`;
@@ -1043,6 +1074,18 @@ function tglChatAction(idx){
   el.classList.toggle('on');
 }
 
+async function resolveNamesToIds(names){
+  // Map a list of participant names to contact ids, creating a fiche for any unknown name.
+  const ids=[];
+  for(const raw of (names||[])){
+    const nm=(raw||'').trim(); if(!nm) continue;
+    let c=findByName(nm);
+    if(!c){ c={id:uid(),created:Date.now(),name:nm,role:'',edu:'',contact:'',met:'',summary:'',notes:[],relations:[],reminders:[]};
+      contacts.push(c); await save(c); await reconcileRelations(c,''); }
+    if(!ids.includes(c.id)) ids.push(c.id);
+  }
+  return ids;
+}
 async function applyChatActions(){
   if(!chatPendingActions)return;
   const propose=chatPendingActions;
@@ -1053,7 +1096,7 @@ async function applyChatActions(){
     const act=propose.actions[idx];
     if(act.type==='create_reminder'){
       const targetId=act.data.contactId || chatPersonId;
-      const c=contacts.find(x=>x.id===targetId);
+      const c=getContact(targetId);
       if(c){
         c.reminders=c.reminders||[];
         const dueDate=act.data.dueInDays?new Date(Date.now()+act.data.dueInDays*86400000).getTime():null;
@@ -1062,7 +1105,7 @@ async function applyChatActions(){
       }
     }
     else if(act.type==='modify_contact'){
-      const c=contacts.find(x=>x.id===act.data.contactId);
+      const c=getContact(act.data.contactId);
       if(c){
         const oldName=c.name||'';
         Object.assign(c,act.data.updates||{});
@@ -1076,6 +1119,33 @@ async function applyChatActions(){
       contacts.push(nc);
       await save(nc);
       await reconcileRelations(nc,'');
+    }
+    else if(act.type==='create_event'){
+      const pids=await resolveNamesToIds(act.data.participants);
+      if(chatPersonId && !pids.includes(chatPersonId)) pids.unshift(chatPersonId);
+      const ev={id:uid(),kind:'event',created:Date.now(),title:act.data.title||'Sans titre',
+        date:act.data.date?new Date(act.data.date).toISOString():'',
+        location:act.data.location||'',context:act.data.context||'',participantIds:pids};
+      contacts.push(ev); await save(ev);
+    }
+    else if(act.type==='modify_event'){
+      const e=getEvent(act.data.eventId);
+      if(e){
+        const u=act.data.updates||{};
+        if(u.title!=null) e.title=u.title;
+        if(u.location!=null) e.location=u.location;
+        if(u.context!=null) e.context=u.context;
+        if(u.date!=null) e.date=u.date?new Date(u.date).toISOString():'';
+        await save(e);
+      }
+    }
+    else if(act.type==='add_to_event'){
+      const e=getEvent(act.data.eventId);
+      if(e){
+        const pids=await resolveNamesToIds(act.data.participants);
+        e.participantIds=Array.from(new Set([...(e.participantIds||[]),...pids]));
+        await save(e);
+      }
     }
   }
   
