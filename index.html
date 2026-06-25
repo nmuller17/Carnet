@@ -159,6 +159,7 @@
       <span class="mast">Carnet</span>
       <div class="right">
         <button class="bell" onclick="openReminders()">🔔<span class="dot" id="bellDot" style="display:none;">0</span></button>
+        <button class="bell" onclick="openEvents()" title="Événements" style="font-size:19px;">📅</button>
         <button class="bell" onclick="openChat(null)" title="Assistant" style="font-size:20px;">💬</button>
         <button class="bell" onclick="openSettings()" title="Réglages" style="font-size:20px;">⚙︎</button>
         <span class="count" id="syncBadge" style="cursor:pointer;" onclick="syncNow()"></span>
@@ -276,6 +277,38 @@
     <div class="formgrid" id="chatConfirmBody"></div>
   </section>
 
+  <section id="screen-events" class="screen">
+    <div class="backbar"><button class="back" onclick="go('list')">‹ Carnet</button><div class="spacer"></div><button class="iconbtn" onclick="openEventNew()">+ Nouvel événement</button></div>
+    <div class="list" id="eventsBody"></div>
+  </section>
+
+  <section id="screen-event-detail" class="screen">
+    <div class="backbar"><button class="back" onclick="openEvents()">‹ Événements</button><div class="spacer"></div><button class="iconbtn" id="eventEditBtn">Modifier</button></div>
+    <div class="detail" id="eventDetailBody"></div>
+  </section>
+
+  <section id="screen-event-form" class="screen">
+    <div class="backbar"><button class="back" id="eventFormCancel">‹ Annuler</button><div class="spacer"></div><span class="count" id="eventFormTitle">Nouvel événement</span></div>
+    <div class="formgrid">
+      <label class="fl">Titre</label><input class="f" id="ev-title" placeholder="Ex. Conférence Tech, Dîner réseau…" autocomplete="off">
+      <label class="fl">Date</label><input class="f" id="ev-date" type="date">
+      <label class="fl">Lieu (optionnel)</label><input class="f" id="ev-location" placeholder="Ex. Station F, Paris" autocomplete="off">
+      <label class="fl">Contexte / ce qui s'est dit</label><textarea class="f" id="ev-context" style="min-height:120px;" placeholder="De quoi avez-vous parlé ? Ce qui rendait ce moment notable. Micro du clavier iOS pour dicter."></textarea>
+      <div class="mic-hint">🎤 Dictée : micro du clavier iOS.</div>
+      <div class="btn-row"><button class="btn ghost" id="eventFormDelete" style="display:none;">Supprimer</button><button class="btn primary" id="eventFormSave">Enregistrer</button></div>
+      <p class="keynote">Après l'enregistrement, ajoutez les personnes rencontrées depuis la fiche de l'événement.</p>
+    </div>
+  </section>
+
+  <section id="screen-event-attach" class="screen">
+    <div class="backbar"><button class="back" id="eventAttachCancel">‹ Annuler</button><div class="spacer"></div><button class="iconbtn" id="eventAttachSave">Valider</button></div>
+    <div class="formgrid">
+      <label class="fl">Qui était présent ?</label>
+      <input class="f" id="ev-attach-search" type="search" placeholder="Rechercher ou créer un contact…" autocomplete="off">
+      <div id="ev-attach-list" style="margin-top:12px;"></div>
+    </div>
+  </section>
+
   <button class="fab" id="fab" onclick="openNew()">+</button>
 </div>
 
@@ -349,7 +382,17 @@ async function removeContact(c){ // soft-delete so other devices learn about it
 }
 
 let contacts=[], currentId=null, editingId=null, enrichMode='paste', reviewData=null;
+let currentEventId=null, editingEventId=null;
 const $=id=>document.getElementById(id);
+
+/* contacts[] holds BOTH contact fiches and event objects (same store/table, no Supabase migration).
+   Events carry kind:'event'; contacts have no kind (legacy) or kind:'contact'. These helpers keep
+   the two from ever being treated as one another. Use realContacts() everywhere you mean "people". */
+function isEvent(x){return x&&x.kind==='event';}
+function realContacts(){return contacts.filter(x=>!isEvent(x));}
+function allEvents(){return contacts.filter(isEvent);}
+function getContact(id){const x=contacts.find(c=>c.id===id); return isEvent(x)?null:x;}
+function getEvent(id){const x=contacts.find(c=>c.id===id); return isEvent(x)?x:null;}
 
 function uid(){return Date.now().toString(36)+Math.random().toString(36).slice(2,7);}
 function esc(s){return (s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
@@ -360,11 +403,11 @@ function relDate(ts){if(!ts)return''; const d=Math.floor((Date.now()-ts)/8640000
 function fullDate(ts){return new Date(ts).toLocaleDateString('fr-FR',{day:'numeric',month:'long',year:'numeric'});}
 function shortDate(ts){return new Date(ts).toLocaleDateString('fr-FR',{day:'numeric',month:'short'});}
 function lastTouch(c){const n=c.notes||[]; return n.length? n[n.length-1].ts : c.created;}
-function findByName(name){if(!name)return null; const n=name.trim().toLowerCase();
-  return contacts.find(c=>(c.name||'').trim().toLowerCase()===n)
-      || contacts.find(c=>{const cn=(c.name||'').trim().toLowerCase(); return cn&&(cn.includes(n)||n.includes(cn));});}
+function findByName(name){if(!name)return null; const n=name.trim().toLowerCase(); const people=realContacts();
+  return people.find(c=>(c.name||'').trim().toLowerCase()===n)
+      || people.find(c=>{const cn=(c.name||'').trim().toLowerCase(); return cn&&(cn.includes(n)||n.includes(cn));});}
 
-function allReminders(){const out=[]; contacts.forEach(c=>(c.reminders||[]).forEach(r=>out.push({...r,contactId:c.id,contactName:c.name}))); return out;}
+function allReminders(){const out=[]; realContacts().forEach(c=>(c.reminders||[]).forEach(r=>out.push({...r,contactId:c.id,contactName:c.name}))); return out;}
 function pendingCount(){return allReminders().filter(r=>!r.done).length;}
 function refreshBell(){const n=pendingCount(); const d=$('bellDot'); if(n>0){d.style.display='flex'; d.textContent=n;} else d.style.display='none';}
 async function sendToReminders(cid,rid){
@@ -384,12 +427,13 @@ function go(s){document.querySelectorAll('.screen').forEach(x=>x.classList.remov
 
 function renderList(filter=''){
   const list=$('contactList'); const f=filter.trim().toLowerCase();
-  let arr=[...contacts];
+  const people=realContacts();
+  let arr=[...people];
   if(f) arr=arr.filter(c=>(c.name+' '+(c.role||'')+' '+(c.edu||'')+' '+(c.summary||'')).toLowerCase().includes(f));
   arr.sort((a,b)=>lastTouch(b)-lastTouch(a));
-  $('contactCount').textContent=contacts.length?`${contacts.length} contact${contacts.length>1?'s':''}`:'';
+  $('contactCount').textContent=people.length?`${people.length} contact${people.length>1?'s':''}`:'';
   refreshBell();
-  if(!arr.length){list.innerHTML=contacts.length?`<div class="empty"><div class="glyph">∅</div><p>Aucun résultat.</p></div>`:`<div class="empty"><div class="glyph">✎</div><p>Votre carnet est vierge.<br>Touchez + après chaque rencontre.</p></div>`; return;}
+  if(!arr.length){list.innerHTML=people.length?`<div class="empty"><div class="glyph">∅</div><p>Aucun résultat.</p></div>`:`<div class="empty"><div class="glyph">✎</div><p>Votre carnet est vierge.<br>Touchez + après chaque rencontre.</p></div>`; return;}
   list.innerHTML=arr.map(c=>{
     const due=(c.reminders||[]).filter(r=>!r.done).sort((a,b)=>(a.due||'').localeCompare(b.due||''))[0];
     return `<div class="card" onclick="openDetail('${c.id}')">
@@ -417,6 +461,16 @@ function openDetail(id){
     return `<span class="chip ghost" onclick="createFromMention(${JSON.stringify(r.name).replace(/"/g,'&quot;')},${JSON.stringify(r.context||'').replace(/"/g,'&quot;')},'${c.id}',${ri})">${esc(r.name)} <span class="arr">+</span></span>`;
   }).join('')+'</div>';}
 
+  const evs=eventsForContact(c.id).slice().reverse(); // most recent first for display
+  let evHtml='';
+  if(evs.length){evHtml='<div class="sec"><h3>Rencontres · '+evs.length+'</h3>'+evs.map(e=>{
+    const others=(e.participantIds||[]).filter(pid=>pid!==c.id).map(pid=>{const p=getContact(pid); return p?p.name:null;}).filter(Boolean);
+    const first=isFirstMeeting(c.id,e.id);
+    return `<div class="rem" onclick="openEvent('${e.id}')" style="cursor:pointer;">
+      <div class="rtxt">${esc(e.title||'Sans titre')}${first?' <span style="color:var(--accent);font-size:11px;font-weight:600;">1ʳᵉ rencontre</span>':''}</div>
+      <div class="rdate">${e.date?fullDate(eventDateTs(e)):'date ?'}${e.location?' · '+esc(e.location):''}${others.length?' · avec '+esc(others.slice(0,3).join(', '))+(others.length>3?'…':''):''}</div>
+    </div>`;}).join('')+'</div>';}
+
   const rems=(c.reminders||[]).slice().sort((a,b)=>(a.done?1:0)-(b.done?1:0)||(a.due||'').localeCompare(b.due||'')); let remHtml='';
   if(rems.length){remHtml='<div class="sec"><h3>Rappels</h3>'+rems.map(r=>`
     <div class="rem ${r.done?'rdone':''}"><div class="rtxt">${esc(r.text)}</div>
@@ -432,7 +486,7 @@ function openDetail(id){
       ${metaBits.length?`<div class="meta">${metaBits.join(' · ')}</div>`:''}</div>
     ${c.summary?`<div class="sec"><h3>À retenir</h3><div class="field-line">${esc(c.summary)}</div></div>`:''}
     <div class="sec"><button class="btn accent" onclick="openChat('${c.id}')">💬 Briefing avant rendez-vous</button></div>
-    ${relHtml}${remHtml}
+    ${relHtml}${evHtml}${remHtml}
     <div class="sec"><h3>Notes d'échanges · ${notes.length}</h3>
       <button class="btn ghost" style="margin-bottom:14px;" onclick="openNote()">+ Nouvelle note</button>
       ${notes.length? notes.map(n=>`
@@ -453,9 +507,9 @@ function openReminderForm(fromReminders){
   $('rem-text').value=''; $('rem-date').value=''; $('rem-text').style.borderColor='';
   const wrap=$('rem-contact-wrap'); const sel=$('rem-contact');
   if(fromReminders){
-    if(!contacts.length){alert('Ajoutez d\'abord un contact.'); return;}
+    if(!realContacts().length){alert('Ajoutez d\'abord un contact.'); return;}
     wrap.style.display='block';
-    sel.innerHTML=[...contacts].sort((a,b)=>(a.name||'').localeCompare(b.name||''))
+    sel.innerHTML=[...realContacts()].sort((a,b)=>(a.name||'').localeCompare(b.name||''))
       .map(c=>`<option value="${c.id}">${esc(c.name||'Sans nom')}</option>`).join('');
     if(currentId) sel.value=currentId;
     $('remFormCancel').onclick=()=>openReminders();
@@ -549,13 +603,14 @@ async function analyzeNote(nid,btn){
     `"updates": objet avec uniquement les champs du profil à modifier parmi {role,edu,contact,met}, nouvelle valeur (UNIQUEMENT ceux qui changent réellement);\n`+
     `"summary": nouvelle version du résumé "à retenir" intégrant les points clés cumulés (1-3 phrases), ou "" si inchangé;\n`+
     `"reminders": tableau d'actions de suivi, chacune {text: libellé impératif court, dueInDays: entier ou null};\n`+
-    `"people": tableau des AUTRES personnes mentionnées, chacune {name, context: en quoi elle est liée, note: info à retenir sur elle ou ""}.\n`+
+    `"people": tableau des AUTRES personnes mentionnées, chacune {name, context: en quoi elle est liée, note: info à retenir sur elle ou ""};\n`+
+    `"event": si la note décrit une rencontre/un événement identifiable (conférence, dîner, réunion, salon…), un objet {title: nom court de l'événement, dateGuess: "YYYY-MM-DD" si déductible sinon "", location: lieu ou "", context: 1 phrase sur ce qui s'est passé}; sinon null. Ne propose un event que s'il y a un contexte de rencontre clair (pas pour un simple échange à distance).\n`+
     `N'inclus pas le contact lui-même dans "people". N'invente rien.`;
   const payload=`PROFIL ACTUEL:\nNom: ${c.name}\nPoste: ${c.role||''}\nÉtudes: ${c.edu||''}\nCoordonnées: ${c.contact||''}\nRencontre: ${c.met||''}\nÀ retenir: ${c.summary||''}\n\n`+
     `CONTACTS DÉJÀ CONNUS: ${otherNames.join(', ')||'(aucun)'}\n\nNOUVELLE NOTE (${fullDate(note.ts)}):\n"""${note.body}"""`;
   try{
     const obj=JSON.parse(await callAI(sys,payload,1100));
-    reviewData={contactId:c.id, noteId:nid, raw:obj, accept:{updates:{}, summary:false, reminders:[], people:[]}};
+    reviewData={contactId:c.id, noteId:nid, raw:obj, accept:{updates:{}, summary:false, reminders:[], people:[], event:!!(obj.event&&obj.event.title)}};
     Object.keys(obj.updates||{}).forEach(k=>reviewData.accept.updates[k]=true);
     reviewData.accept.summary=!!(obj.summary&&obj.summary.trim()&&obj.summary.trim()!==(c.summary||'').trim());
     (obj.reminders||[]).forEach((_,i)=>reviewData.accept.reminders[i]=true);
@@ -581,19 +636,27 @@ function renderReview(){
       html+=`<div class="rev-item"><div class="check ${a.reminders[i]?'on':''}" onclick="tgl('reminders',${i})">✓</div>
       <div class="body"><div class="new">${esc(r.text)}</div><div class="sub">échéance${due||' : sans date'}</div></div></div>`;});
     html+='</div>';}
+  if(o.event&&o.event.title){const ev=o.event; const others=(o.people||[]).filter((p,i)=>a.people[i]).map(p=>p.name);
+    html+='<div class="rev-block"><h4>Événement à créer</h4>'+
+      `<div class="rev-item"><div class="check ${a.event?'on':''}" onclick="tgl('event')">✓</div>
+      <div class="body"><div class="new">${esc(ev.title)}</div>
+      <div class="sub">${ev.dateGuess?fullDate(new Date(ev.dateGuess).getTime()):'date à préciser'}${ev.location?' · '+esc(ev.location):''}</div>
+      <div class="sub">Présents : ${esc(c.name)}${others.length?', '+esc(others.join(', ')):''}</div>
+      ${ev.context?`<div class="sub">${esc(ev.context)}</div>`:''}</div></div></div>`;}
   if((o.people||[]).length){html+='<div class="rev-block"><h4>Personnes mentionnées</h4>';
     o.people.forEach((p,i)=>{const exist=findByName(p.name);
       html+=`<div class="rev-item"><div class="check ${a.people[i]?'on':''}" onclick="tgl('people',${i})">✓</div>
       <div class="body"><div class="new">${esc(p.name)}${exist?' <span style="color:var(--green);font-size:12px;">(fiche existante)</span>':' <span style="color:var(--accent);font-size:12px;">(nouvelle fiche)</span>'}</div>
       <div class="sub">${esc(p.context||'')}${p.note?' — '+esc(p.note):''}</div></div></div>`;});
     html+='</div>';}
-  if(!upKeys.length&&!(o.summary&&o.summary.trim())&&!(o.reminders||[]).length&&!(o.people||[]).length)
+  if(!upKeys.length&&!(o.summary&&o.summary.trim())&&!(o.reminders||[]).length&&!(o.people||[]).length&&!(o.event&&o.event.title))
     html+='<p class="field-line" style="color:var(--ink-faint);">L\'assistant n\'a rien trouvé à ajouter.</p>';
   html+='<button class="btn primary" id="applyReview" style="margin-top:24px;">Appliquer ma sélection</button>';
   $('reviewBody').innerHTML=html; $('applyReview').onclick=applyReview; go('review');
 }
 function tgl(kind,key){
   if(kind==='summary') reviewData.accept.summary=!reviewData.accept.summary;
+  else if(kind==='event') reviewData.accept.event=!reviewData.accept.event;
   else if(kind==='updates') reviewData.accept.updates[key]=!reviewData.accept.updates[key];
   else reviewData.accept[kind][key]=!reviewData.accept[kind][key];
   renderReview();
@@ -608,6 +671,7 @@ async function applyReview(){
   (o.reminders||[]).forEach((r,i)=>{if(a.reminders[i]){const due=r.dueInDays!=null? new Date(Date.now()+r.dueInDays*86400000).toISOString():null;
     c.reminders.push({id:uid(),text:r.text,due,done:false});}});
   c.relations=c.relations||[];
+  const eventParticipantIds=[c.id];
   for(let i=0;i<(o.people||[]).length;i++){
     if(!a.people[i])continue; const p=o.people[i];
     const exist=findByName(p.name);
@@ -621,11 +685,20 @@ async function applyReview(){
       back.targetId=c.id;
       if(p.note){exist.notes=exist.notes||[]; exist.notes.push({id:uid(),ts:Date.now(),body:`(via ${c.name}) ${p.note}`,analyzed:true});}
       await save(exist);
+      eventParticipantIds.push(exist.id);
     } else {
       const nc={id:uid(),created:Date.now(),name:p.name,role:'',edu:'',contact:'',met:`Mentionné·e par ${c.name}`,summary:p.note||p.context||'',notes:[],relations:[{name:c.name,context:p.context||'',targetId:c.id}],reminders:[]};
       contacts.push(nc); await save(nc);
       fwd.targetId=nc.id; // link forward relation to the freshly created fiche
+      eventParticipantIds.push(nc.id);
     }
+  }
+  if(a.event && o.event && o.event.title){
+    const ev={id:uid(),kind:'event',created:Date.now(),title:o.event.title,
+      date:o.event.dateGuess?new Date(o.event.dateGuess).toISOString():new Date(c.notes&&c.notes.find(n=>n.id===reviewData.noteId)?c.notes.find(n=>n.id===reviewData.noteId).ts:Date.now()).toISOString(),
+      location:o.event.location||'',context:o.event.context||'',
+      participantIds:Array.from(new Set(eventParticipantIds))};
+    contacts.push(ev); await save(ev);
   }
   const note=(c.notes||[]).find(n=>n.id===reviewData.noteId); if(note)note.analyzed=true;
   await save(c); reviewData=null; renderList($('search').value); openDetail(c.id);
@@ -682,17 +755,137 @@ $('formDelete').onclick=async()=>{if(!confirm('Supprimer ce contact et toutes se
 $('search').oninput=e=>renderList(e.target.value);
 $('f-name').oninput=()=>{$('f-name').style.borderColor='';};
 
+/* ========== ÉVÉNEMENTS / RENCONTRES ========== */
+/* An event is a row in the same store, kind:'event'. It links N contacts by stable id.
+   "First meeting" is never stored — it is derived as the earliest event a contact appears in. */
+function eventDateTs(e){return e.date?new Date(e.date).getTime():(e.created||0);}
+function sortedEvents(){return allEvents().slice().sort((a,b)=>eventDateTs(b)-eventDateTs(a));}
+function isFirstMeeting(contactId,eventId){
+  const evs=eventsForContact(contactId); // already chronological asc
+  return evs.length && evs[0].id===eventId;
+}
+
+function openEvents(){
+  const body=$('eventsBody'); const evs=sortedEvents();
+  if(!evs.length){body.innerHTML=`<div class="empty"><div class="glyph">◷</div><p>Aucun événement.<br>Touchez + pour enregistrer une rencontre.</p></div>`; go('events'); return;}
+  body.innerHTML=evs.map(e=>{
+    const names=(e.participantIds||[]).map(pid=>{const p=getContact(pid); return p?p.name:null;}).filter(Boolean);
+    const n=names.length;
+    return `<div class="card" onclick="openEvent('${e.id}')">
+      <div class="row1"><span class="nm">${esc(e.title||'Sans titre')}</span><span class="when">${e.date?shortDate(eventDateTs(e)):''}</span></div>
+      ${e.location?`<div class="role">${esc(e.location)}</div>`:''}
+      <div class="due">${n} personne${n>1?'s':''}${n?' · '+esc(names.slice(0,3).join(', '))+(n>3?'…':''):''}</div>
+    </div>`;}).join('');
+  go('events');
+}
+
+function openEvent(id){
+  currentEventId=id; const e=getEvent(id); if(!e){openEvents();return;}
+  const parts=(e.participantIds||[]).map(pid=>getContact(pid)).filter(Boolean);
+  let partHtml='';
+  if(parts.length){partHtml='<div class="sec"><h3>Personnes rencontrées · '+parts.length+'</h3>'+
+    parts.sort((a,b)=>(a.name||'').localeCompare(b.name||'')).map(p=>{
+      const first=isFirstMeeting(p.id,e.id);
+      return `<span class="chip" onclick="openDetail('${p.id}')">${esc(p.name||'Sans nom')}${p.role?` · ${esc(p.role)}`:''}${first?' <span style="color:var(--accent);font-size:11px;font-weight:600;">1ʳᵉ rencontre</span>':''} <span class="arr">›</span></span>`;
+    }).join('')+'</div>';}
+  else partHtml='<div class="sec"><h3>Personnes rencontrées</h3><div class="field-line" style="color:var(--ink-faint);font-style:italic;">Personne pour l\'instant. Touchez « Ajouter des personnes ».</div></div>';
+
+  $('eventDetailBody').innerHTML=`
+    <div class="hero"><div class="nm">${esc(e.title||'Sans titre')}</div>
+      ${e.date?`<div class="role">${fullDate(eventDateTs(e))}</div>`:''}
+      ${e.location?`<div class="meta">${esc(e.location)}</div>`:''}</div>
+    ${e.context?`<div class="sec"><h3>Contexte</h3><div class="field-line">${esc(e.context)}</div></div>`:''}
+    <div class="sec"><button class="btn ghost" onclick="openEventAttach()">+ Ajouter des personnes</button></div>
+    ${partHtml}`;
+  go('event-detail');
+}
+
+function openEventNew(){
+  editingEventId=null; $('eventFormTitle').textContent='Nouvel événement'; $('eventFormDelete').style.display='none';
+  $('ev-title').value=''; $('ev-date').value=new Date().toISOString().slice(0,10); $('ev-location').value=''; $('ev-context').value='';
+  $('ev-title').style.borderColor='';
+  go('event-form'); setTimeout(()=>$('ev-title').focus(),200);
+}
+$('eventEditBtn').onclick=()=>{const e=getEvent(currentEventId); if(!e)return; editingEventId=currentEventId;
+  $('eventFormTitle').textContent='Modifier l\'événement'; $('eventFormDelete').style.display='block';
+  $('ev-title').value=e.title||''; $('ev-date').value=e.date?e.date.slice(0,10):''; $('ev-location').value=e.location||''; $('ev-context').value=e.context||'';
+  go('event-form');};
+$('eventFormCancel').onclick=()=>editingEventId?openEvent(editingEventId):openEvents();
+$('ev-title').oninput=()=>{$('ev-title').style.borderColor='';};
+$('eventFormSave').onclick=async()=>{
+  const title=$('ev-title').value.trim(); if(!title){$('ev-title').focus(); $('ev-title').style.borderColor='var(--danger)'; return;}
+  const dateStr=$('ev-date').value;
+  let e;
+  if(editingEventId){e=getEvent(editingEventId);}
+  else{e={id:uid(),kind:'event',created:Date.now(),participantIds:[]}; contacts.push(e);}
+  e.title=title; e.date=dateStr?new Date(dateStr).toISOString():''; e.location=$('ev-location').value.trim(); e.context=$('ev-context').value.trim();
+  e.participantIds=e.participantIds||[];
+  await save(e);
+  openEvent(e.id);
+};
+$('eventFormDelete').onclick=async()=>{if(!confirm('Supprimer cet événement ? Les fiches des personnes sont conservées.'))return;
+  const e=getEvent(editingEventId); if(e){ await removeContact(e); } openEvents();};
+
+/* Attach-people screen: a searchable multi-select over real contacts, plus quick-create. */
+let attachSel=new Set();
+function openEventAttach(){
+  const e=getEvent(currentEventId); if(!e)return;
+  attachSel=new Set(e.participantIds||[]);
+  $('ev-attach-search').value='';
+  renderAttachList('');
+  go('event-attach'); setTimeout(()=>$('ev-attach-search').focus(),200);
+}
+function renderAttachList(filter){
+  const f=(filter||'').trim().toLowerCase();
+  let arr=realContacts().slice().sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+  if(f) arr=arr.filter(c=>(c.name+' '+(c.role||'')).toLowerCase().includes(f));
+  const box=$('ev-attach-list');
+  let html='';
+  if(f && !arr.some(c=>(c.name||'').trim().toLowerCase()===f)){
+    html+=`<div class="rev-item" onclick="attachQuickCreate(${JSON.stringify(filter.trim()).replace(/"/g,'&quot;')})">
+      <div class="check"><span style="color:var(--accent);font-weight:700;">+</span></div>
+      <div class="body"><div class="new" style="color:var(--accent);">Créer « ${esc(filter.trim())} » comme nouveau contact</div></div></div>`;
+  }
+  html+=arr.map(c=>{const on=attachSel.has(c.id);
+    return `<div class="rev-item" onclick="toggleAttach('${c.id}')">
+      <div class="check ${on?'on':''}">✓</div>
+      <div class="body"><div class="new">${esc(c.name||'Sans nom')}</div>${c.role?`<div class="sub">${esc(c.role)}</div>`:''}</div></div>`;}).join('');
+  if(!arr.length && !f) html='<div class="field-line" style="color:var(--ink-faint);font-style:italic;">Aucun contact. Tapez un nom pour en créer un.</div>';
+  box.innerHTML=html;
+}
+function toggleAttach(id){ if(attachSel.has(id))attachSel.delete(id); else attachSel.add(id); renderAttachList($('ev-attach-search').value); }
+async function attachQuickCreate(name){
+  const nc={id:uid(),created:Date.now(),name:name,role:'',edu:'',contact:'',met:'',summary:'',notes:[],relations:[],reminders:[]};
+  contacts.push(nc); await save(nc); await reconcileRelations(nc,'');
+  attachSel.add(nc.id);
+  $('ev-attach-search').value='';
+  renderAttachList('');
+}
+$('ev-attach-search').oninput=e=>renderAttachList(e.target.value);
+$('eventAttachCancel').onclick=()=>openEvent(currentEventId);
+$('eventAttachSave').onclick=async()=>{
+  const e=getEvent(currentEventId); if(!e)return;
+  e.participantIds=Array.from(attachSel);
+  await save(e);
+  renderList($('search').value);
+  openEvent(e.id);
+};
+
 /* ========== CHAT / BRIEFING ========== */
 let chatPersonId=null, chatHistory=[], chatBusy=false;
+function eventsForContact(id){return allEvents().filter(e=>(e.participantIds||[]).includes(id)).sort((a,b)=>(a.date||'').localeCompare(b.date||''));}
 function contactContext(c){
   const notes=[...(c.notes||[])].sort((a,b)=>a.ts-b.ts)
     .map(n=>`- [${fullDate(n.ts)}] ${n.body}`).join('\n')||'(aucune note)';
   const rems=(c.reminders||[]).filter(r=>!r.done).map(r=>`- ${r.text}${r.due?' (échéance '+fullDate(new Date(r.due).getTime())+')':''}`).join('\n')||'(aucun)';
-  const rels=(c.relations||[]).map(r=>{const t=r.targetId?contacts.find(x=>x.id===r.targetId):null; const nm=t?t.name:r.name; return `- ${nm}${r.context?' ('+r.context+')':''}`;}).join('\n')||'(aucune)';
-  return `### ${c.name}\nPoste: ${c.role||'?'}\nParcours: ${c.edu||'?'}\nCoordonnées: ${c.contact||'?'}\nRencontre: ${c.met||'?'}\nÀ retenir: ${c.summary||'?'}\nDernier contact: ${relDate(lastTouch(c))}\nNotes d'échanges:\n${notes}\nRappels en cours:\n${rems}\nRelations:\n${rels}`;
+  const rels=(c.relations||[]).map(r=>{const t=r.targetId?getContact(r.targetId):null; const nm=t?t.name:r.name; return `- ${nm}${r.context?' ('+r.context+')':''}`;}).join('\n')||'(aucune)';
+  const evs=eventsForContact(c.id);
+  const evStr=evs.map(e=>{const others=(e.participantIds||[]).filter(pid=>pid!==c.id).map(pid=>{const p=getContact(pid); return p?p.name:null;}).filter(Boolean);
+    return `- ${e.date?fullDate(new Date(e.date).getTime()):'date ?'} · ${e.title}${e.location?' ('+e.location+')':''}${others.length?' — aussi présents : '+others.join(', '):''}${e.context?' — '+e.context:''}`;}).join('\n')||'(aucun événement)';
+  return `### ${c.name}\nPoste: ${c.role||'?'}\nParcours: ${c.edu||'?'}\nCoordonnées: ${c.contact||'?'}\nRencontre: ${c.met||'?'}\nÀ retenir: ${c.summary||'?'}\nDernier contact: ${relDate(lastTouch(c))}\nÉvénements / rencontres:\n${evStr}\nNotes d'échanges:\n${notes}\nRappels en cours:\n${rems}\nRelations:\n${rels}`;
 }
 function carnetOverview(){
-  return contacts.map(c=>`- ${c.name} — ${c.role||'poste ?'} — vu ${relDate(lastTouch(c))}${(c.reminders||[]).some(r=>!r.done)?' — a des rappels en cours':''}`).join('\n');
+  return realContacts().map(c=>`- ${c.name} — ${c.role||'poste ?'} — vu ${relDate(lastTouch(c))}${(c.reminders||[]).some(r=>!r.done)?' — a des rappels en cours':''}`).join('\n');
 }
 function chatSystem(){
   const actionProtocol = `\n\n--- ACTIONS ---\n`+
@@ -715,11 +908,17 @@ function chatSystem(){
       `Sois concret, bref, et n'invente jamais d'information absente de la fiche. Réponds en français.\n\n`+
       `FICHE COMPLÈTE (id du contact : ${c.id}) :\n${contactContext(c)}`+actionProtocol;
   }
+  const people=realContacts();
+  const evs=allEvents().slice().sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  const evBlock=evs.length?`\n\nÉVÉNEMENTS (rencontres, dans le temps) :\n`+evs.map(e=>{
+      const names=(e.participantIds||[]).map(pid=>{const p=getContact(pid); return p?p.name:null;}).filter(Boolean);
+      return `- ${e.date?fullDate(new Date(e.date).getTime()):'date ?'} · ${e.title}${e.location?' ('+e.location+')':''} — participants : ${names.join(', ')||'aucun'}${e.context?' — '+e.context:''}`;
+    }).join('\n'):'';
   return `Tu es l'assistant d'un carnet relationnel personnel. Tu as accès à la liste des contacts ci-dessous et tu réponds aux questions de l'utilisateur `+
-    `(qui relancer, ce qu'il sait sur une personne, qui il a rencontré quelque part…). Si une question porte sur une personne précise, appuie-toi sur sa fiche. `+
+    `(qui relancer, ce qu'il sait sur une personne, qui il a rencontré à tel événement…). Si une question porte sur une personne précise, appuie-toi sur sa fiche. `+
     `N'invente jamais. Réponds en français, de façon concrète et brève.\n\nCONTACTS (avec leur id) :\n`+
-    contacts.map(c=>`- [${c.id}] ${c.name} — ${c.role||'poste ?'}`).join('\n')+`\n\n`+
-    `FICHES DÉTAILLÉES :\n${contacts.map(c=>`(id: ${c.id})\n`+contactContext(c)).join('\n\n')}`+actionProtocol;
+    people.map(c=>`- [${c.id}] ${c.name} — ${c.role||'poste ?'}`).join('\n')+evBlock+`\n\n`+
+    `FICHES DÉTAILLÉES :\n${people.map(c=>`(id: ${c.id})\n`+contactContext(c)).join('\n\n')}`+actionProtocol;
 }
 function renderChat(){
   const s=$('chatScroll');
@@ -752,7 +951,7 @@ function openChat(personId){
     autoBrief();
   } else {
     $('chatTitle').textContent='Assistant — tout le carnet';
-    chatHistory.push({role:'system_note',content:contacts.length?`Posez une question, ou demandez une action (créer un contact, modifier une fiche, ajouter un rappel). Tout changement vous sera soumis avant d'être appliqué.`:'Votre carnet est vide.'});
+    chatHistory.push({role:'system_note',content:realContacts().length?`Posez une question, ou demandez une action (créer un contact, modifier une fiche, ajouter un rappel). Tout changement vous sera soumis avant d'être appliqué.`:'Votre carnet est vide.'});
     setSuggestions(); renderChat(); go('chat');
   }
 }
@@ -921,7 +1120,8 @@ $('importFile').onchange=e=>{
     if(!confirm(`Importer ${arr.length} contact(s) ? Les fiches de même identifiant seront fusionnées (la plus récente gagne).`))return;
     for(const inc of arr){ const local=contacts.find(x=>x.id===inc.id);
       if(!local || (inc.updated_at||0)>=(local.updated_at||0)){
-        inc.relations=inc.relations||[]; inc.reminders=inc.reminders||[]; inc.notes=inc.notes||[];
+        if(inc.kind==='event'){ inc.participantIds=inc.participantIds||[]; }
+        else { inc.relations=inc.relations||[]; inc.reminders=inc.reminders||[]; inc.notes=inc.notes||[]; }
         const idx=contacts.findIndex(x=>x.id===inc.id); if(idx>=0)contacts[idx]=inc; else contacts.push(inc);
         await dbPut(inc); sbPush(inc);
       } }
@@ -931,9 +1131,13 @@ $('importFile').onchange=e=>{
 };
 
 (async function(){await openDB(); contacts=await dbAll();
-  contacts.forEach(c=>{c.relations=c.relations||[]; c.reminders=c.reminders||[]; c.updated_at=c.updated_at||c.created||Date.now(); (c.notes||[]).forEach(n=>{if(n.analyzed===undefined)n.analyzed=false;});});
+  contacts.forEach(c=>{
+    c.updated_at=c.updated_at||c.created||Date.now();
+    if(isEvent(c)){ c.participantIds=c.participantIds||[]; return; }
+    c.relations=c.relations||[]; c.reminders=c.reminders||[]; (c.notes||[]).forEach(n=>{if(n.analyzed===undefined)n.analyzed=false;});
+  });
   // one-time catch-up: link existing name-based relations to a fiche id when one matches
-  contacts.forEach(c=>{ (c.relations||[]).forEach(r=>{
+  realContacts().forEach(c=>{ (c.relations||[]).forEach(r=>{
     if(!r.targetId){ const m=findByName(r.name); if(m && m.id!==c.id){ r.targetId=m.id; r.name=m.name; } }
   });});
   setEnrichMode('paste'); renderList();
