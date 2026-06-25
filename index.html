@@ -160,7 +160,7 @@
   <section id="screen-list" class="screen active">
     <header class="top">
       <div class="right">
-        <button class="bell" id="bellBtn" type="button">🔔<span class="dot" id="bellDot" style="display:none;">0</span></button>
+        <button class="bell" id="bellBtn" type="button">🔔</button>
         <button class="bell" onclick="openEvents()" title="Événements" style="font-size:19px;">📅</button>
         <button class="bell" onclick="openSettings()" title="Réglages" style="font-size:20px;">⚙︎</button>
         <span class="count" id="syncBadge" style="cursor:pointer;" onclick="syncNow()"></span>
@@ -414,7 +414,7 @@ function findByName(name){if(!name)return null; const n=name.trim().toLowerCase(
 
 function allReminders(){const out=[]; realContacts().forEach(c=>(c.reminders||[]).forEach(r=>out.push({...r,contactId:c.id,contactName:c.name}))); return out;}
 function pendingCount(){return allReminders().filter(r=>!r.done).length;}
-function refreshBell(){const n=pendingCount(); const d=$('bellDot'); if(n>0){d.style.display='flex'; d.textContent=n;} else d.style.display='none';}
+function refreshBell(){}
 async function sendToReminders(cid,rid){
   const c=contacts.find(x=>x.id===cid); const r=c&&(c.reminders||[]).find(x=>x.id===rid); if(!r)return;
   const due = r.due ? ' (échéance '+fullDate(new Date(r.due).getTime())+')' : '';
@@ -612,6 +612,7 @@ function openReminders(){
   console.error('openReminders failed:',err);
  }
 }
+(function(){ var b=document.getElementById('bellBtn'); if(b){ b.onclick=openReminders; b.addEventListener('click',openReminders); } })();
 
 function setEnrichMode(m){enrichMode=m; $('seg-paste').classList.toggle('on',m==='paste'); $('seg-clean').classList.toggle('on',m==='clean'); $('ai-input').style.display=(m==='paste')?'block':'none';}
 function getApiKey(){let k=localStorage.getItem('anthropic_key');
@@ -1283,7 +1284,6 @@ $('importFile').onchange=e=>{
     if(!r.targetId){ const m=findByName(r.name); if(m && m.id!==c.id){ r.targetId=m.id; r.name=m.name; } }
   });});
   setEnrichMode('paste'); renderList();
-  $('bellBtn').addEventListener('click', openReminders);
   if(sbEnabled()){ setSync('syncing'); try{ await sbPullMerge(); await sbPushAll(); setSync('ok'); renderList($('search').value); }catch(e){setSync('error',e.message);} }
   else setSync('off');
   document.addEventListener('visibilitychange',()=>{ if(!document.hidden && sbEnabled()) scheduleSync(); });
