@@ -584,6 +584,7 @@ async function toggleRem(cid,rid){const c=contacts.find(x=>x.id===cid); const r=
 async function delRem(cid,rid){const c=contacts.find(x=>x.id===cid); c.reminders=(c.reminders||[]).filter(x=>x.id!==rid);
   await save(c); if($('screen-detail').classList.contains('active'))openDetail(cid); else openReminders(); renderList($('search').value);}
 function openReminders(){
+ try{
   const body=$('remindersBody'); const all=allReminders().filter(r=>!r.done);
   const today=new Date(); today.setHours(23,59,59,999);
   const late=[],todayl=[],soon=[],noDate=[];
@@ -605,6 +606,11 @@ function openReminders(){
   else{html+=block('En retard',late,'late'); html+=block("Aujourd'hui",todayl); html+=block('À venir',soon); html+=block('Sans date',noDate);
     if(done.length) html+=`<h3>Terminés · ${done.length}</h3>`+done.slice(0,20).map(remCard).join('');}
   body.innerHTML=html; go('reminders');
+ }catch(err){
+  try{ $('remindersBody').innerHTML='<div class="empty"><div class="glyph">⚠</div><p>Erreur d\'affichage des rappels :<br><b>'+esc(err&&err.message)+'</b><br><small>'+esc(String(err&&err.stack||'').split('\n').slice(0,3).join(' · '))+'</small></p></div>'; }catch(e){}
+  go('reminders');
+  console.error('openReminders failed:',err);
+ }
 }
 
 function setEnrichMode(m){enrichMode=m; $('seg-paste').classList.toggle('on',m==='paste'); $('seg-clean').classList.toggle('on',m==='clean'); $('ai-input').style.display=(m==='paste')?'block':'none';}
