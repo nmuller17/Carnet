@@ -441,7 +441,7 @@ function renderList(filter=''){
   refreshBell();
   if(!arr.length){list.innerHTML=people.length?`<div class="empty"><div class="glyph">∅</div><p>Aucun résultat.</p></div>`:`<div class="empty"><div class="glyph">✎</div><p>Votre carnet est vierge.<br>Touchez + après chaque rencontre.</p></div>`; return;}
   list.innerHTML=arr.map(c=>{
-    const due=(c.reminders||[]).filter(r=>!r.done).sort((a,b)=>(a.due||'').localeCompare(b.due||''))[0];
+    const due=(c.reminders||[]).filter(r=>!r.done).sort((a,b)=>String(a.due||'').localeCompare(String(b.due||'')))[0];
     return `<div class="card" onclick="openDetail('${c.id}')">
       <div class="row1"><span class="nm">${esc(c.name||'Sans nom')}</span><span class="when">${relDate(lastTouch(c))}</span></div>
       ${c.role?`<div class="role">${esc(c.role)}</div>`:''}
@@ -481,7 +481,7 @@ function openDetail(id){
       <div class="rdate">${e.date?fullDate(eventDateTs(e)):'date ?'}${e.location?' · '+esc(e.location):''}${others.length?' · avec '+esc(others.slice(0,3).join(', '))+(others.length>3?'…':''):''}</div>
     </div>`;}).join('')+'</div>';}
 
-  const rems=(c.reminders||[]).slice().sort((a,b)=>(a.done?1:0)-(b.done?1:0)||(a.due||'').localeCompare(b.due||'')); let remHtml='';
+  const rems=(c.reminders||[]).slice().sort((a,b)=>(a.done?1:0)-(b.done?1:0)||String(a.due||'').localeCompare(String(b.due||''))); let remHtml='';
   if(rems.length){remHtml='<div class="sec"><h3>Rappels</h3>'+rems.map(r=>`
     <div class="rem ${r.done?'rdone':''}"><div class="rtxt">${esc(r.text)}</div>
     ${r.due?`<div class="rdate">échéance : ${fullDate(new Date(r.due).getTime())}</div>`:''}
@@ -586,12 +586,13 @@ async function delRem(cid,rid){const c=contacts.find(x=>x.id===cid); c.reminders
 function openReminders(){
  try{
   const body=$('remindersBody'); const all=allReminders().filter(r=>!r.done);
+  all.forEach(r=>{ if(r.due!=null && typeof r.due!=='string'){ const d=new Date(r.due); r.due=isNaN(d)?'':d.toISOString(); } });
   const today=new Date(); today.setHours(23,59,59,999);
   const late=[],todayl=[],soon=[],noDate=[];
   all.forEach(r=>{if(!r.due){noDate.push(r);return;} const t=new Date(r.due).getTime();
     if(t<Date.now()-86400000) late.push(r); else if(t<=today.getTime()) todayl.push(r); else soon.push(r);});
   const done=allReminders().filter(r=>r.done);
-  const sortByDue=(a,b)=>(a.due||'').localeCompare(b.due||''); [late,todayl,soon,noDate].forEach(a=>a.sort(sortByDue));
+  const sortByDue=(a,b)=>String(a.due||'').localeCompare(String(b.due||'')); [late,todayl,soon,noDate].forEach(a=>a.sort(sortByDue));
   function remCard(r){const isLate=r.due&&new Date(r.due).getTime()<Date.now()-86400000&&!r.done;
     return `<div class="rem ${r.done?'rdone':''} ${isLate?'late':''}">
     <div class="rtop"><div class="rtxt">${esc(r.text)}
