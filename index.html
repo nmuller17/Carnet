@@ -28,11 +28,11 @@
   .screen{flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch; display:none;}
   .screen.active{display:block;}
 
-  header.top{padding:18px 22px 14px; display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid var(--line); gap:10px;}
-  header.top .mast{font-family:var(--serif); font-style:italic; font-size:30px; letter-spacing:.5px; flex:0 0 auto;}
-  header.top .right{display:flex; align-items:center; gap:6px; flex:1 1 auto; justify-content:flex-end; min-width:0;}
+  header.top{padding:14px 18px 12px; display:flex; align-items:center; border-bottom:1px solid var(--line);}
+  header.top .right{display:flex; align-items:center; gap:10px; width:100%;}
   header.top .count{font-size:12px; color:var(--ink-faint); letter-spacing:.08em; text-transform:uppercase;}
-  .bell{position:relative; background:none; border:none; font-size:21px; cursor:pointer; line-height:1; padding:6px; flex:0 0 auto;}
+  header.top #syncBadge{margin-left:auto;}
+  .bell{position:relative; background:none; border:none; font-size:21px; cursor:pointer; line-height:1; padding:6px 4px; flex:0 0 auto;}
   .bell .dot{position:absolute; top:-4px; right:-6px; background:var(--accent); color:#fff; font-size:10px; font-weight:700; min-width:16px; height:16px; border-radius:8px; display:flex; align-items:center; justify-content:center; padding:0 4px; font-family:var(--sans);}
   .backbar{display:flex; align-items:center; gap:14px; padding:16px 18px 12px; border-bottom:1px solid var(--line);}
   .backbar button.back{background:none; border:none; font-family:var(--serif); font-size:17px; color:var(--accent); cursor:pointer; padding:4px 0;}
@@ -67,6 +67,7 @@
   .detail .hero .role{font-size:15px; color:var(--ink-soft); margin-top:6px; line-height:1.4;}
   .detail .hero .meta{font-size:13px; color:var(--ink-faint); margin-top:8px; line-height:1.5;}
   .detail .hero a{color:var(--accent); text-decoration:none;}
+  .detail .hero .metalink{color:var(--accent); cursor:pointer; text-decoration:underline; text-underline-offset:2px;}
 
   .sec{margin-top:24px;}
   .sec h3{font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--ink-faint); margin-bottom:10px; font-weight:600;}
@@ -158,7 +159,6 @@
 
   <section id="screen-list" class="screen active">
     <header class="top">
-      <span class="mast">Carnet</span>
       <div class="right">
         <button class="bell" onclick="openReminders()">🔔<span class="dot" id="bellDot" style="display:none;">0</span></button>
         <button class="bell" onclick="openEvents()" title="Événements" style="font-size:19px;">📅</button>
@@ -202,6 +202,8 @@
     <div class="backbar"><button class="back" onclick="go('detail')">‹ Retour</button><div class="spacer"></div><span class="count">Nouvelle note</span></div>
     <div class="formgrid">
       <label class="fl" id="noteFor"></label>
+      <label class="fl">Relier à une rencontre (optionnel)</label>
+      <select class="f" id="note-event"></select>
       <textarea class="f" id="note-body" style="min-height:200px;" placeholder="Décrivez votre échange : ce qui s'est dit, ce qui compte, les suites à donner. Micro du clavier iOS pour dicter."></textarea>
       <div class="mic-hint">🎤 Dictée : micro du clavier iOS.</div>
       <button class="btn primary" id="noteSave" style="margin-top:20px;">Ajouter au carnet</button>
@@ -451,7 +453,11 @@ function openDetail(id){
   currentId=id; const c=contacts.find(x=>x.id===id); if(!c)return;
   const notes=[...(c.notes||[])].sort((a,b)=>b.ts-a.ts);
   const metaBits=[];
-  if(c.met) metaBits.push(`Rencontré·e : ${esc(c.met)}`);
+  const firstEv=eventsForContact(c.id)[0]; // chronological asc; first = earliest meeting
+  if(firstEv){
+    const d=firstEv.date?fullDate(eventDateTs(firstEv)):'';
+    metaBits.push(`Rencontré·e à : <span class="metalink" onclick="openEvent('${firstEv.id}')">${esc(firstEv.title)}${d?' · '+d:''}</span>`);
+  } else if(c.met) metaBits.push(`Rencontré·e : ${esc(c.met)}`);
   if(c.contact){const isUrl=/^https?:\/\//i.test(c.contact)||/linkedin\.com/i.test(c.contact);
     metaBits.push(isUrl?`<a href="${esc(c.contact.startsWith('http')?c.contact:'https://'+c.contact)}" target="_blank" rel="noopener">${esc(c.contact)}</a>`:esc(c.contact));}
 
@@ -495,6 +501,7 @@ function openDetail(id){
       ${notes.length? notes.map(n=>`
         <div class="note ${n.analyzed?'analyzed':''}"><button class="nt-del" onclick="delNote('${n.id}')">×</button>
         <div class="nt-date">${fullDate(n.ts)} · ${relDate(n.ts)}</div>
+        ${n.eventId&&getEvent(n.eventId)?`<div class="nt-date" style="text-transform:none;color:var(--accent);cursor:pointer;" onclick="openEvent('${n.eventId}')">↪ ${esc(getEvent(n.eventId).title||'événement')}</div>`:''}
         <div class="nt-body">${esc(n.body)}</div>
         ${n.analyzed?'<div class="rdate" style="color:var(--green);margin-top:8px;">✓ analysée</div>'
           :`<button class="btn accent" style="margin-top:10px;padding:10px;font-size:14px;" onclick="analyzeNote('${n.id}',this)">⚡ Analyser cette note</button>`}
@@ -504,7 +511,15 @@ function openDetail(id){
   go('detail');
 }
 
-function openNote(){const c=contacts.find(x=>x.id===currentId); $('noteFor').textContent='Pour '+(c?.name||''); $('note-body').value=''; go('note');}
+function openNote(){const c=contacts.find(x=>x.id===currentId); $('noteFor').textContent='Pour '+(c?.name||'');
+  $('note-body').value='';
+  const sel=$('note-event');
+  const evs=eventsForContact(currentId).slice().reverse(); // most recent first
+  sel.innerHTML='<option value="">— Aucune —</option>'+
+    evs.map(e=>`<option value="${e.id}">${esc(e.title||'Sans titre')}${e.date?' · '+shortDate(eventDateTs(e)):''}</option>`).join('')+
+    '<option value="__new__">+ Créer un nouvel événement…</option>';
+  sel.value='';
+  go('note');}
 function openReminderForm(fromReminders){
   // fromReminders=true → ouvert depuis l'onglet Rappels (choisir le contact); sinon depuis une fiche
   $('rem-text').value=''; $('rem-date').value=''; $('rem-text').style.borderColor='';
@@ -536,7 +551,29 @@ $('remSaveBtn').onclick=async()=>{const text=$('rem-text').value.trim(); const d
   if(remFormMode==='reminders') openReminders(); else openDetail(cid);}
 $('rem-text').oninput=()=>{$('rem-text').style.borderColor='';};
 $('noteSave').onclick=async()=>{const body=$('note-body').value.trim(); if(!body)return;
-  const c=contacts.find(x=>x.id===currentId); c.notes=c.notes||[]; c.notes.push({id:uid(),ts:Date.now(),body,analyzed:false});
+  const c=contacts.find(x=>x.id===currentId); c.notes=c.notes||[];
+  const evChoice=$('note-event').value;
+  const note={id:uid(),ts:Date.now(),body,analyzed:false};
+  if(evChoice==='__new__'){
+    // create a fresh event prefilled with this contact + note date, then open it for editing
+    const ev={id:uid(),kind:'event',created:Date.now(),title:'',date:new Date().toISOString(),location:'',context:'',participantIds:[c.id]};
+    note.eventId=ev.id;
+    c.notes.push(note);
+    contacts.push(ev);
+    await save(c); await save(ev);
+    renderList($('search').value);
+    // jump into the event form so they can name/date it; prefill from openEventNew logic
+    editingEventId=ev.id; $('eventFormTitle').textContent='Nouvel événement'; $('eventFormDelete').style.display='block';
+    $('ev-title').value=''; $('ev-date').value=new Date().toISOString().slice(0,10); $('ev-location').value=''; $('ev-context').value=''; $('ev-title').style.borderColor='';
+    go('event-form'); setTimeout(()=>$('ev-title').focus(),200);
+    return;
+  }
+  if(evChoice){
+    note.eventId=evChoice;
+    const ev=getEvent(evChoice);
+    if(ev){ ev.participantIds=ev.participantIds||[]; if(!ev.participantIds.includes(c.id)){ev.participantIds.push(c.id); await save(ev);} }
+  }
+  c.notes.push(note);
   await save(c); openDetail(currentId); renderList($('search').value);};
 async function delNote(nid){if(!confirm('Supprimer cette note ?'))return;
   const c=contacts.find(x=>x.id===currentId); c.notes=(c.notes||[]).filter(n=>n.id!==nid); await save(c); openDetail(currentId);}
