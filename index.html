@@ -160,7 +160,7 @@
   <section id="screen-list" class="screen active">
     <header class="top">
       <div class="right">
-        <button class="bell" onclick="openReminders()">🔔<span class="dot" id="bellDot" style="display:none;">0</span></button>
+        <button class="bell" id="bellBtn" type="button">🔔<span class="dot" id="bellDot" style="display:none;">0</span></button>
         <button class="bell" onclick="openEvents()" title="Événements" style="font-size:19px;">📅</button>
         <button class="bell" onclick="openSettings()" title="Réglages" style="font-size:20px;">⚙︎</button>
         <span class="count" id="syncBadge" style="cursor:pointer;" onclick="syncNow()"></span>
@@ -191,9 +191,8 @@
         <div class="ai-sub">Collez un profil brut à structurer, ou laissez l'assistant reformuler ce que vous avez saisi.</div>
         <div class="seg"><button id="seg-paste" class="on" onclick="setEnrichMode('paste')">Coller un profil</button><button id="seg-clean" onclick="setEnrichMode('clean')">Reformuler ma saisie</button></div>
         <textarea class="f" id="ai-input" placeholder="Collez ici un texte de profil…"></textarea>
-        <button class="btn ghost" id="ai-run" style="margin-top:12px;">Mettre en forme avec l'assistant</button>
         <button class="btn accent" id="ai-enrich" style="margin-top:10px;">⚡ Analyser & enrichir (rappels, événement, relations)</button>
-        <div class="ai-sub" style="margin-top:8px;">« Mettre en forme » remplit seulement les champs. « Analyser & enrichir » crée la fiche puis propose résumé, rappels, événement et relations à valider.</div>
+        <div class="ai-sub" style="margin-top:8px;">« Analyser & enrichir » crée la fiche puis propose résumé, rappels, événement et relations à valider.</div>
         <div class="ai-status" id="ai-status"></div>
       </div>
       <div class="btn-row"><button class="btn ghost" id="formDelete" style="display:none;">Supprimer</button><button class="btn primary" id="formSave">Enregistrer</button></div>
@@ -621,27 +620,12 @@ async function callAI(system,userContent,maxTokens){
   const data=await r.json(); let txt=(data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('').trim();
   return txt.replace(/```json|```/g,'').trim();
 }
-$('ai-run').onclick=async()=>{
-  const status=$('ai-status'); let payload;
-  if(enrichMode==='paste'){const raw=$('ai-input').value.trim(); if(!raw){status.className='ai-status err'; status.textContent='Collez d\'abord un texte de profil.'; return;}
-    payload=`Voici le texte brut d'un profil professionnel. Extrais les informations.\n\n"""${raw}"""`;}
-  else payload=`Informations saisies à nettoyer/reformuler sans rien inventer :\nNom: ${$('f-name').value}\nPoste: ${$('f-role').value}\nÉtudes: ${$('f-edu').value}\nCoordonnées: ${$('f-contact').value}\nRencontre: ${$('f-met').value}\nÀ retenir: ${$('f-summary').value}`;
-  status.className='ai-status'; status.innerHTML='<span class="spinner"></span>L\'assistant travaille…'; $('ai-run').disabled=true;
-  const sys=`Tu structures une fiche contact. Réponds UNIQUEMENT par un objet JSON brut, clés exactes: name, role, edu, contact, met, summary. role=poste+entreprise; edu=parcours; contact=email/tel/LinkedIn; met=contexte de rencontre; summary=une phrase mémorable. N'invente rien, chaîne vide si inconnu.`;
-  try{const obj=JSON.parse(await callAI(sys,payload,700));
-    if(obj.name)$('f-name').value=obj.name; if(obj.role)$('f-role').value=obj.role; if(obj.edu)$('f-edu').value=obj.edu;
-    if(obj.contact)$('f-contact').value=obj.contact; if(obj.met)$('f-met').value=obj.met; if(obj.summary)$('f-summary').value=obj.summary;
-    status.className='ai-status ok'; status.textContent='✓ Champs remplis. Vérifiez puis enregistrez.';
-  }catch(e){status.className='ai-status err'; status.textContent='⚠ '+e.message;}
-  finally{$('ai-run').disabled=false;}
-};
-
 $('ai-enrich').onclick=async()=>{
   const status=$('ai-status');
   // The enrich pipeline needs source text to analyze: prefer pasted text, else the manually typed fields.
   const pasted=$('ai-input').value.trim();
   let name=$('f-name').value.trim();
-  status.className='ai-status'; status.innerHTML='<span class="spinner"></span>L\'assistant structure la fiche…'; $('ai-enrich').disabled=true; $('ai-run').disabled=true;
+  status.className='ai-status'; status.innerHTML='<span class="spinner"></span>L\'assistant structure la fiche…'; $('ai-enrich').disabled=true;
   try{
     // Step 1: if pasted text is present, structure the fields first (so name/role/etc are populated).
     let noteBody='';
@@ -673,7 +657,7 @@ $('ai-enrich').onclick=async()=>{
     status.innerHTML='<span class="spinner"></span>Analyse complète…';
     await analyzeNote(note.id,null);
   }catch(e){status.className='ai-status err'; status.textContent='⚠ '+e.message;}
-  finally{$('ai-enrich').disabled=false; $('ai-run').disabled=false;}
+  finally{$('ai-enrich').disabled=false;}
 };
 
 async function analyzeNote(nid,btn){
@@ -1293,6 +1277,7 @@ $('importFile').onchange=e=>{
     if(!r.targetId){ const m=findByName(r.name); if(m && m.id!==c.id){ r.targetId=m.id; r.name=m.name; } }
   });});
   setEnrichMode('paste'); renderList();
+  $('bellBtn').addEventListener('click', openReminders);
   if(sbEnabled()){ setSync('syncing'); try{ await sbPullMerge(); await sbPushAll(); setSync('ok'); renderList($('search').value); }catch(e){setSync('error',e.message);} }
   else setSync('off');
   document.addEventListener('visibilitychange',()=>{ if(!document.hidden && sbEnabled()) scheduleSync(); });
