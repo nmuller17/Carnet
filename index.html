@@ -28,11 +28,11 @@
   .screen{flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch; display:none;}
   .screen.active{display:block;}
 
-  header.top{padding:18px 22px 14px; display:flex; align-items:baseline; justify-content:space-between; border-bottom:1px solid var(--line);}
-  header.top .mast{font-family:var(--serif); font-style:italic; font-size:30px; letter-spacing:.5px;}
-  header.top .right{display:flex; align-items:center; gap:14px;}
+  header.top{padding:18px 22px 14px; display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid var(--line); gap:10px;}
+  header.top .mast{font-family:var(--serif); font-style:italic; font-size:30px; letter-spacing:.5px; flex:0 0 auto;}
+  header.top .right{display:flex; align-items:center; gap:6px; flex:1 1 auto; justify-content:flex-end; min-width:0;}
   header.top .count{font-size:12px; color:var(--ink-faint); letter-spacing:.08em; text-transform:uppercase;}
-  .bell{position:relative; background:none; border:none; font-size:22px; cursor:pointer; line-height:1;}
+  .bell{position:relative; background:none; border:none; font-size:21px; cursor:pointer; line-height:1; padding:6px; flex:0 0 auto;}
   .bell .dot{position:absolute; top:-4px; right:-6px; background:var(--accent); color:#fff; font-size:10px; font-weight:700; min-width:16px; height:16px; border-radius:8px; display:flex; align-items:center; justify-content:center; padding:0 4px; font-family:var(--sans);}
   .backbar{display:flex; align-items:center; gap:14px; padding:16px 18px 12px; border-bottom:1px solid var(--line);}
   .backbar button.back{background:none; border:none; font-family:var(--serif); font-size:17px; color:var(--accent); cursor:pointer; padding:4px 0;}
@@ -57,6 +57,8 @@
   .card .due{display:inline-block; margin-top:8px; font-size:11px; color:var(--accent); font-weight:600;}
 
   .fab{position:fixed; right:max(20px,calc(50% - 280px + 20px)); bottom:calc(24px + env(safe-area-inset-bottom)); width:60px; height:60px; border-radius:50%; background:var(--ink); color:var(--paper); border:none; font-size:30px; font-family:var(--serif); cursor:pointer; z-index:20; box-shadow:0 6px 20px rgba(26,23,20,.3); display:flex; align-items:center; justify-content:center; line-height:1; padding-bottom:3px;}
+  .assistant-fab{position:fixed; left:max(20px,calc(50% - 280px + 20px)); bottom:calc(24px + env(safe-area-inset-bottom)); width:60px; height:60px; border-radius:50%; background:var(--accent); color:#fff; border:none; font-size:26px; cursor:pointer; z-index:20; box-shadow:0 6px 20px rgba(156,66,33,.32); display:flex; align-items:center; justify-content:center; line-height:1;}
+  .assistant-fab:active{transform:scale(.92);}
   .fab:active{transform:scale(.92);}
 
   .detail{padding:4px 20px 130px;}
@@ -160,7 +162,6 @@
       <div class="right">
         <button class="bell" onclick="openReminders()">🔔<span class="dot" id="bellDot" style="display:none;">0</span></button>
         <button class="bell" onclick="openEvents()" title="Événements" style="font-size:19px;">📅</button>
-        <button class="bell" onclick="openChat(null)" title="Assistant" style="font-size:20px;">💬</button>
         <button class="bell" onclick="openSettings()" title="Réglages" style="font-size:20px;">⚙︎</button>
         <span class="count" id="syncBadge" style="cursor:pointer;" onclick="syncNow()"></span>
         <span class="count" id="contactCount"></span>
@@ -309,6 +310,7 @@
     </div>
   </section>
 
+  <button class="assistant-fab" id="assistantFab" onclick="openChat(null)" title="Assistant">💬</button>
   <button class="fab" id="fab" onclick="openNew()">+</button>
 </div>
 
@@ -423,6 +425,7 @@ async function sendToReminders(cid,rid){
 
 function go(s){document.querySelectorAll('.screen').forEach(x=>x.classList.remove('active'));
   $('screen-'+s).classList.add('active'); $('fab').style.display=(s==='list')?'flex':'none';
+  $('assistantFab').style.display=(s==='list')?'flex':'none';
   document.querySelector('.screen.active').scrollTop=0;}
 
 function renderList(filter=''){
