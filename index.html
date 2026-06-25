@@ -28,12 +28,12 @@
   .screen{flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch; display:none;}
   .screen.active{display:block;}
 
-  header.top{padding:14px 18px 12px; display:flex; align-items:center; border-bottom:1px solid var(--line);}
-  header.top .right{display:flex; align-items:center; gap:10px; width:100%;}
+  header.top{padding:14px 18px 12px; display:flex; align-items:center; border-bottom:1px solid var(--line); position:relative; z-index:5;}
+  header.top .right{display:flex; align-items:center; gap:10px; width:100%; position:relative; z-index:5;}
   header.top .count{font-size:12px; color:var(--ink-faint); letter-spacing:.08em; text-transform:uppercase;}
   header.top #syncBadge{margin-left:auto;}
-  .bell{position:relative; background:none; border:none; font-size:21px; cursor:pointer; line-height:1; padding:6px 4px; flex:0 0 auto;}
-  .bell .dot{position:absolute; top:-4px; right:-6px; background:var(--accent); color:#fff; font-size:10px; font-weight:700; min-width:16px; height:16px; border-radius:8px; display:flex; align-items:center; justify-content:center; padding:0 4px; font-family:var(--sans);}
+  .bell{position:relative; z-index:5; background:none; border:none; font-size:21px; cursor:pointer; line-height:1; padding:8px 10px; flex:0 0 auto; -webkit-tap-highlight-color:rgba(0,0,0,.04);}
+  .bell .dot{position:absolute; top:-4px; right:-6px; pointer-events:none; background:var(--accent); color:#fff; font-size:10px; font-weight:700; min-width:16px; height:16px; border-radius:8px; display:flex; align-items:center; justify-content:center; padding:0 4px; font-family:var(--sans);}
   .backbar{display:flex; align-items:center; gap:14px; padding:16px 18px 12px; border-bottom:1px solid var(--line);}
   .backbar button.back{background:none; border:none; font-family:var(--serif); font-size:17px; color:var(--accent); cursor:pointer; padding:4px 0;}
   .backbar .spacer{flex:1;}
@@ -192,6 +192,8 @@
         <div class="seg"><button id="seg-paste" class="on" onclick="setEnrichMode('paste')">Coller un profil</button><button id="seg-clean" onclick="setEnrichMode('clean')">Reformuler ma saisie</button></div>
         <textarea class="f" id="ai-input" placeholder="Collez ici un texte de profil…"></textarea>
         <button class="btn ghost" id="ai-run" style="margin-top:12px;">Mettre en forme avec l'assistant</button>
+        <button class="btn accent" id="ai-enrich" style="margin-top:10px;">⚡ Analyser & enrichir (rappels, événement, relations)</button>
+        <div class="ai-sub" style="margin-top:8px;">« Mettre en forme » remplit seulement les champs. « Analyser & enrichir » crée la fiche puis propose résumé, rappels, événement et relations à valider.</div>
         <div class="ai-status" id="ai-status"></div>
       </div>
       <div class="btn-row"><button class="btn ghost" id="formDelete" style="display:none;">Supprimer</button><button class="btn primary" id="formSave">Enregistrer</button></div>
@@ -634,10 +636,50 @@ $('ai-run').onclick=async()=>{
   finally{$('ai-run').disabled=false;}
 };
 
+$('ai-enrich').onclick=async()=>{
+  const status=$('ai-status');
+  // The enrich pipeline needs source text to analyze: prefer pasted text, else the manually typed fields.
+  const pasted=$('ai-input').value.trim();
+  let name=$('f-name').value.trim();
+  status.className='ai-status'; status.innerHTML='<span class="spinner"></span>L\'assistant structure la fiche…'; $('ai-enrich').disabled=true; $('ai-run').disabled=true;
+  try{
+    // Step 1: if pasted text is present, structure the fields first (so name/role/etc are populated).
+    let noteBody='';
+    if(enrichMode==='paste' && pasted){
+      const sys=`Tu structures une fiche contact. Réponds UNIQUEMENT par un objet JSON brut, clés exactes: name, role, edu, contact, met, summary. role=poste+entreprise; edu=parcours; contact=email/tel/LinkedIn; met=contexte de rencontre; summary=une phrase mémorable. N'invente rien, chaîne vide si inconnu.`;
+      const obj=JSON.parse(await callAI(sys,`Voici le texte brut d'un profil professionnel. Extrais les informations.\n\n"""${pasted}"""`,700));
+      if(obj.name)$('f-name').value=obj.name; if(obj.role)$('f-role').value=obj.role; if(obj.edu)$('f-edu').value=obj.edu;
+      if(obj.contact)$('f-contact').value=obj.contact; if(obj.met)$('f-met').value=obj.met; if(obj.summary)$('f-summary').value=obj.summary;
+      name=$('f-name').value.trim();
+      noteBody=pasted; // analyze the original pasted text for relations/event/follow-ups
+    } else {
+      // no pasted text: build the note from the typed fields so there's something to analyze
+      noteBody=[$('f-role').value,$('f-edu').value,$('f-met').value,$('f-summary').value].filter(Boolean).join('. ').trim();
+    }
+    if(!name){status.className='ai-status err'; status.textContent='⚠ Renseignez au moins un nom (ou collez un profil qui en contient un).'; $('f-name').focus(); $('f-name').style.borderColor='var(--danger)'; return;}
+    if(!noteBody){status.className='ai-status err'; status.textContent='⚠ Rien à analyser : collez un profil ou remplissez les champs.'; return;}
+
+    // Step 2: persist the contact now (analyze pipeline needs a real id + stored note)
+    const c={id:uid(),created:Date.now(),name,role:$('f-role').value.trim(),edu:$('f-edu').value.trim(),
+      contact:$('f-contact').value.trim(),met:$('f-met').value.trim(),summary:$('f-summary').value.trim(),
+      notes:[],relations:[],reminders:[]};
+    const note={id:uid(),ts:Date.now(),body:noteBody,analyzed:false};
+    c.notes.push(note);
+    contacts.push(c); await save(c); await reconcileRelations(c,'');
+    currentId=c.id; editingId=null;
+    renderList($('search').value);
+
+    // Step 3: run the existing full-analysis pipeline → review screen (summary, reminders, event, relations)
+    status.innerHTML='<span class="spinner"></span>Analyse complète…';
+    await analyzeNote(note.id,null);
+  }catch(e){status.className='ai-status err'; status.textContent='⚠ '+e.message;}
+  finally{$('ai-enrich').disabled=false; $('ai-run').disabled=false;}
+};
+
 async function analyzeNote(nid,btn){
   const c=contacts.find(x=>x.id===currentId); const note=(c.notes||[]).find(n=>n.id===nid); if(!note)return;
   if(btn){btn.disabled=true; btn.innerHTML='<span class="spinner"></span>Analyse…';}
-  const otherNames=contacts.filter(x=>x.id!==c.id).map(x=>x.name).filter(Boolean);
+  const otherNames=realContacts().filter(x=>x.id!==c.id).map(x=>x.name).filter(Boolean);
   const sys=`Tu es l'assistant d'un CRM relationnel personnel. On te donne le profil actuel d'un contact et une nouvelle note d'échange. `+
     `Réponds UNIQUEMENT par un objet JSON brut (aucun texte autour) avec ces clés:\n`+
     `"updates": objet avec uniquement les champs du profil à modifier parmi {role,edu,contact,met}, nouvelle valeur (UNIQUEMENT ceux qui changent réellement);\n`+
@@ -760,8 +802,8 @@ async function createFromMention(name,context,originId,relIdx){
 function fillForm(c){$('f-name').value=c?.name||''; $('f-role').value=c?.role||''; $('f-edu').value=c?.edu||'';
   $('f-contact').value=c?.contact||''; $('f-met').value=c?.met||''; $('f-summary').value=c?.summary||'';
   $('ai-input').value=''; $('ai-status').textContent=''; $('ai-status').className='ai-status';}
-function openNew(){editingId=null; $('formTitle').textContent='Nouveau contact'; $('formDelete').style.display='none'; fillForm(null); go('form'); setTimeout(()=>$('f-name').focus(),200);}
-$('editBtn').onclick=()=>{const c=contacts.find(x=>x.id===currentId); editingId=currentId; $('formTitle').textContent='Modifier'; $('formDelete').style.display='block'; fillForm(c); go('form');};
+function openNew(){editingId=null; $('formTitle').textContent='Nouveau contact'; $('formDelete').style.display='none'; $('ai-enrich').style.display='block'; fillForm(null); go('form'); setTimeout(()=>$('f-name').focus(),200);}
+$('editBtn').onclick=()=>{const c=contacts.find(x=>x.id===currentId); editingId=currentId; $('formTitle').textContent='Modifier'; $('formDelete').style.display='block'; $('ai-enrich').style.display='none'; fillForm(c); go('form');};
 $('formCancel').onclick=()=>editingId?openDetail(editingId):go('list');
 $('formSave').onclick=async()=>{const name=$('f-name').value.trim(); if(!name){$('f-name').focus(); $('f-name').style.borderColor='var(--danger)'; return;}
   let c; const wasNew=!editingId; let oldName='';
